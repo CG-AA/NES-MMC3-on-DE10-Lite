@@ -12,13 +12,15 @@ INES_HEADER_SIZE = 16
 PRG_RAM_OFFSET   = 0x00000000
 CHR_RAM_OFFSET   = 0x00080000  # +512KB
 
-# STRUCTURAL FIX: BATCHING
-# Instead of Read-After-Write (too slow) or Blind-Write (overflows),
-# We write N packets, then read 1 word to force a pipeline sync.
-# This prevents the UDP buffer from filling up and dropping packets.
-SYNC_INTERVAL_PACKETS = 32  # Sync every 32 packets
-PACKET_SIZE_SIM       = 128 # Bytes per UDP packet (Sim)
-PACKET_SIZE_HW        = 255 # Bytes per UART packet (Hardware)
+# ETHERBONE LIMITS
+# Etherbone has a hard limit of 255 bytes per burst.
+# Exceeding this causes the "Burst size exceeds maximum" crash.
+MAX_BURST_SIZE   = 250  # Safe cap (under 255)
+
+# FLOW CONTROL
+SYNC_INTERVAL_PACKETS = 16  # Sync more often (every 16 packets) to prevent pipe breaks
+PACKET_SIZE_SIM       = 250 # Maximize packet size to reduce overhead
+PACKET_SIZE_HW        = 250 # Safe default for HW too
 
 # =============================================================================
 # NES PARSER
@@ -55,39 +57,44 @@ def robust_write(wb, base_addr, data, packet_size, is_sim):
     """
     Writes data using a Batched Window strategy to prevent buffer overflow.
     """
+    # Clamp packet size to protocol limit
+    packet_size = min(packet_size, MAX_BURST_SIZE)
+    
     total_len = len(data)
     packets_sent = 0
     start_time = time.time()
     
-    # Pre-calculate chunks to avoid slicing overhead in loop
+    # Pre-calculate chunks
     chunks = [data[i:i + packet_size] for i in range(0, total_len, packet_size)]
     total_chunks = len(chunks)
 
-    print(f"       Mode: {'Simulation (Throttled)' if is_sim else 'Hardware (Fast)'}")
+    print(f"       Mode: {'Simulation' if is_sim else 'Hardware'}")
+    print(f"       Packet Size: {packet_size} bytes")
     print(f"       Batch Size: Sync every {SYNC_INTERVAL_PACKETS} packets")
 
     for i, chunk in enumerate(chunks):
         current_addr = base_addr + (i * packet_size)
         
-        # 1. Send Data (Blind Write)
-        # RemoteClient handles the low-level packet construction
-        wb.write(current_addr, list(chunk))
-        packets_sent += 1
+        try:
+            # 1. Send Data (Blind Write)
+            wb.write(current_addr, list(chunk))
+            packets_sent += 1
 
-        # 2. Pipeline Sync (The Structural Fix)
-        # If we have sent enough blind packets, force a read-back.
-        # This blocks Python until the Sim/Board confirms it processed up to here.
-        # It clears the UDP/UART buffer and prevents "Ghost Bytes".
-        if packets_sent >= SYNC_INTERVAL_PACKETS:
-            # Read 4 bytes from the last address we just wrote to confirm it's there
-            # We don't even check the value here, we just want the 'ack' delay.
-            _ = wb.read(current_addr, 4)
-            packets_sent = 0 
-            
-            # Update UI only on sync (improves performance)
-            percent = (i / total_chunks) * 100
-            sys.stdout.write(f"\r       Uploading: {percent:.1f}%")
-            sys.stdout.flush()
+            # 2. Pipeline Sync
+            if packets_sent >= SYNC_INTERVAL_PACKETS:
+                # Read 4 bytes to force round-trip and clear buffer
+                _ = wb.read(current_addr, 4)
+                packets_sent = 0 
+                
+                # Update UI
+                percent = (i / total_chunks) * 100
+                sys.stdout.write(f"\r       Uploading: {percent:.1f}%")
+                sys.stdout.flush()
+                
+        except BrokenPipeError:
+            print("\n[CRIT] Connection Broken! The simulation buffer overflowed.")
+            print("       Try reducing SYNC_INTERVAL_PACKETS in the script.")
+            return False
 
     duration = time.time() - start_time
     speed = (total_len / 1024) / duration if duration > 0 else 0
@@ -102,15 +109,14 @@ def robust_verify(wb, base_addr, data, packet_size):
     total_len = len(data)
     errors = 0
     
-    # We can read in larger chunks for verification usually, 
-    # but let's stick to safe sizes to avoid timeouts.
-    read_chunk_size = packet_size * 2
+    # CRITICAL FIX: Ensure read request never exceeds MAX_BURST_SIZE (255)
+    # Previous crash caused by asking for 256 bytes.
+    read_chunk_size = min(packet_size, MAX_BURST_SIZE)
     
     for i in range(0, total_len, read_chunk_size):
         chunk_len = min(read_chunk_size, total_len - i)
         addr = base_addr + i
         
-        # Read
         try:
             read_data = wb.read(addr, chunk_len)
         except Exception as e:
@@ -151,12 +157,13 @@ def upload_sequence(host, port, csr_csv, nes_data, is_sim):
         base_addr = 0x40000000
         print(f"[WARN] Defaulting SDRAM to 0x{base_addr:08x}")
 
-    # Tune settings based on target
     packet_size = PACKET_SIZE_SIM if is_sim else PACKET_SIZE_HW
 
     # --- PROCESS PRG ---
     print(f"\n[PRG] Processing {len(nes_data.prg_data)} bytes...")
-    robust_write(wb, base_addr + PRG_RAM_OFFSET, nes_data.prg_data, packet_size, is_sim)
+    if not robust_write(wb, base_addr + PRG_RAM_OFFSET, nes_data.prg_data, packet_size, is_sim):
+        return False
+        
     if not robust_verify(wb, base_addr + PRG_RAM_OFFSET, nes_data.prg_data, packet_size):
         print("\n\033[91m[FAIL] PRG-ROM Verify Failed.\033[0m")
         return False
@@ -164,7 +171,9 @@ def upload_sequence(host, port, csr_csv, nes_data, is_sim):
 
     # --- PROCESS CHR ---
     print(f"\n[CHR] Processing {len(nes_data.chr_data)} bytes...")
-    robust_write(wb, base_addr + CHR_RAM_OFFSET, nes_data.chr_data, packet_size, is_sim)
+    if not robust_write(wb, base_addr + CHR_RAM_OFFSET, nes_data.chr_data, packet_size, is_sim):
+        return False
+        
     if not robust_verify(wb, base_addr + CHR_RAM_OFFSET, nes_data.chr_data, packet_size):
         print("\n\033[91m[FAIL] CHR-ROM Verify Failed.\033[0m")
         return False
