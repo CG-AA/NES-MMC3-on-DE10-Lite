@@ -47,14 +47,17 @@ class NESParser:
 def upload_and_verify(host, port, csr_csv, nes_data, is_sim):
     print(f"\n[CONN] Connecting to LiteX Server at {host}:{port}...")
     
-    # Simulation Settings: Smaller chunks, slower pace
+    # Etherbone Limit: The protocol uses a 1-byte length field, max 255.
+    MAX_BURST = 255
+    
+    # Simulation Settings: Add delays to prevent buffer overruns in the Sim UART
     if is_sim:
         print("[MODE] Simulation detected. Throttling transfer speed.")
-        CHUNK_SIZE = 256  # Small chunks to prevent UDP buffer overflow
+        CHUNK_SIZE = MAX_BURST
         DELAY = 0.05      # Delay between chunks to let Sim catch up
     else:
-        print("[MODE] Hardware mode. Full speed.")
-        CHUNK_SIZE = 4096
+        print("[MODE] Hardware mode. Full speed (capped at Etherbone limit).")
+        CHUNK_SIZE = MAX_BURST
         DELAY = 0.0
 
     wb = RemoteClient(host=host, port=port, csr_csv=csr_csv)
@@ -77,6 +80,8 @@ def upload_and_verify(host, port, csr_csv, nes_data, is_sim):
             chunk = data[i : i + CHUNK_SIZE]
             addr = start_addr + i
             
+            # CRITICAL FIX: RemoteClient requires a list of integers for burst writes.
+            # Passing raw bytes/bytearray causes it to treat data as a single register value.
             wb.write(addr, list(chunk))
             
             # SIMULATION THROTTLE
