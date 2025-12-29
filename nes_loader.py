@@ -77,7 +77,7 @@ def upload_and_verify(host, port, csr_csv, nes_data, is_sim):
             chunk = data[i : i + CHUNK_SIZE]
             addr = start_addr + i
             
-            wb.write(addr, chunk)
+            wb.write(addr, list(chunk))
             
             # SIMULATION THROTTLE
             if is_sim:
