@@ -1,0 +1,161 @@
+# NES with VGA - DE10-Lite Quartus Project
+
+# Family and device
+set_global_assignment -name FAMILY "MAX 10"
+set_global_assignment -name DEVICE 10M50DAF484C7G
+set_global_assignment -name TOP_LEVEL_ENTITY nes_top_ppu
+
+# Project files
+set_global_assignment -name VERILOG_FILE rtl/nes_top_ppu.v
+set_global_assignment -name VERILOG_FILE rtl/nes_prg_bram.v
+set_global_assignment -name VERILOG_FILE rtl/nes_chr_bram.v
+set_global_assignment -name VERILOG_FILE rtl/nes_chr_multiport.v
+set_global_assignment -name VERILOG_FILE rtl/nes_vram.v
+set_global_assignment -name VERILOG_FILE rtl/nes_vram_dp.v
+set_global_assignment -name VERILOG_FILE rtl/nes_ppu_vga_sync.v
+set_global_assignment -name VERILOG_FILE rtl/vga_timing.v
+set_global_assignment -name VERILOG_FILE rtl/nes_palette.v
+set_global_assignment -name VERILOG_FILE rtl/hex_display.v
+set_global_assignment -name VHDL_FILE "rtl/NES-FPGA/src/t65/T65.vhd"
+set_global_assignment -name VHDL_FILE "rtl/NES-FPGA/src/t65/T65_Pack.vhd"
+set_global_assignment -name VHDL_FILE "rtl/NES-FPGA/src/t65/T65_MCode.vhd"
+set_global_assignment -name VHDL_FILE "rtl/NES-FPGA/src/t65/T65_ALU.vhd"
+
+# Pin assignments for DE10-Lite
+# Clock (50 MHz)
+set_location_assignment PIN_P11 -to clk50
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to clk50
+
+# Reset (active-low button KEY[0])
+set_location_assignment PIN_B8 -to reset_n
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to reset_n
+
+# Slide switches
+set_location_assignment PIN_C10 -to sw[0]
+set_location_assignment PIN_C11 -to sw[1]
+set_location_assignment PIN_D12 -to sw[2]
+set_location_assignment PIN_C12 -to sw[3]
+set_location_assignment PIN_A12 -to sw[4]
+set_location_assignment PIN_B12 -to sw[5]
+set_location_assignment PIN_A13 -to sw[6]
+set_location_assignment PIN_A14 -to sw[7]
+set_location_assignment PIN_B14 -to sw[8]
+set_location_assignment PIN_F15 -to sw[9]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to sw[*]
+
+# LEDs
+set_location_assignment PIN_A8 -to led[0]
+set_location_assignment PIN_A9 -to led[1]
+set_location_assignment PIN_A10 -to led[2]
+set_location_assignment PIN_B10 -to led[3]
+set_location_assignment PIN_D13 -to led[4]
+set_location_assignment PIN_C13 -to led[5]
+set_location_assignment PIN_E14 -to led[6]
+set_location_assignment PIN_D14 -to led[7]
+set_location_assignment PIN_A11 -to led[8]
+set_location_assignment PIN_B11 -to led[9]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to led[*]
+
+# 7-Segment displays (active low)
+# HEX0
+set_location_assignment PIN_C14 -to hex0[0]
+set_location_assignment PIN_E15 -to hex0[1]
+set_location_assignment PIN_C15 -to hex0[2]
+set_location_assignment PIN_C16 -to hex0[3]
+set_location_assignment PIN_E16 -to hex0[4]
+set_location_assignment PIN_D17 -to hex0[5]
+set_location_assignment PIN_C17 -to hex0[6]
+set_location_assignment PIN_D15 -to hex0[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to hex0[*]
+
+# HEX1
+set_location_assignment PIN_C18 -to hex1[0]
+set_location_assignment PIN_D18 -to hex1[1]
+set_location_assignment PIN_E18 -to hex1[2]
+set_location_assignment PIN_B16 -to hex1[3]
+set_location_assignment PIN_A17 -to hex1[4]
+set_location_assignment PIN_A18 -to hex1[5]
+set_location_assignment PIN_B17 -to hex1[6]
+set_location_assignment PIN_A16 -to hex1[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to hex1[*]
+
+# HEX2
+set_location_assignment PIN_B20 -to hex2[0]
+set_location_assignment PIN_A20 -to hex2[1]
+set_location_assignment PIN_B19 -to hex2[2]
+set_location_assignment PIN_A21 -to hex2[3]
+set_location_assignment PIN_B21 -to hex2[4]
+set_location_assignment PIN_C22 -to hex2[5]
+set_location_assignment PIN_B22 -to hex2[6]
+set_location_assignment PIN_A19 -to hex2[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to hex2[*]
+
+# HEX3
+set_location_assignment PIN_F21 -to hex3[0]
+set_location_assignment PIN_E22 -to hex3[1]
+set_location_assignment PIN_E21 -to hex3[2]
+set_location_assignment PIN_C19 -to hex3[3]
+set_location_assignment PIN_C20 -to hex3[4]
+set_location_assignment PIN_D19 -to hex3[5]
+set_location_assignment PIN_E17 -to hex3[6]
+set_location_assignment PIN_D22 -to hex3[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to hex3[*]
+
+# HEX4
+set_location_assignment PIN_F18 -to hex4[0]
+set_location_assignment PIN_E20 -to hex4[1]
+set_location_assignment PIN_E19 -to hex4[2]
+set_location_assignment PIN_J18 -to hex4[3]
+set_location_assignment PIN_H19 -to hex4[4]
+set_location_assignment PIN_F19 -to hex4[5]
+set_location_assignment PIN_F20 -to hex4[6]
+set_location_assignment PIN_F17 -to hex4[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to hex4[*]
+
+# HEX5
+set_location_assignment PIN_J20 -to hex5[0]
+set_location_assignment PIN_K20 -to hex5[1]
+set_location_assignment PIN_L18 -to hex5[2]
+set_location_assignment PIN_N18 -to hex5[3]
+set_location_assignment PIN_M20 -to hex5[4]
+set_location_assignment PIN_N19 -to hex5[5]
+set_location_assignment PIN_N20 -to hex5[6]
+set_location_assignment PIN_L19 -to hex5[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to hex5[*]
+
+# VGA output (accent accent 4-bit DAC accent resistor network)
+# accent Red (accent accent 4 bits accent accent)
+set_location_assignment PIN_AA1 -to vga_r[0]
+set_location_assignment PIN_V1 -to vga_r[1]
+set_location_assignment PIN_Y2 -to vga_r[2]
+set_location_assignment PIN_Y1 -to vga_r[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to vga_r[*]
+
+# Green (4 bits)
+set_location_assignment PIN_W1 -to vga_g[0]
+set_location_assignment PIN_T2 -to vga_g[1]
+set_location_assignment PIN_R2 -to vga_g[2]
+set_location_assignment PIN_R1 -to vga_g[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to vga_g[*]
+
+# Blue (4 bits)
+set_location_assignment PIN_P1 -to vga_b[0]
+set_location_assignment PIN_T1 -to vga_b[1]
+set_location_assignment PIN_P4 -to vga_b[2]
+set_location_assignment PIN_N2 -to vga_b[3]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to vga_b[*]
+
+# VGA sync signals (active low)
+set_location_assignment PIN_N3 -to vga_hs
+set_location_assignment PIN_N1 -to vga_vs
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to vga_hs
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to vga_vs
+
+# Timing constraints
+set_global_assignment -name SDC_FILE nes_vga.sdc
+
+# Misc settings
+set_global_assignment -name ENABLE_CONFIGURATION_PINS OFF
+set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE IMAGE WITH ERAM"
+set_global_assignment -name RESERVE_ALL_UNUSED_PINS_WEAK_PULLUP "AS INPUT TRI-STATED"
+set_global_assignment -name LAST_QUARTUS_VERSION "18.1.0 Lite Edition"

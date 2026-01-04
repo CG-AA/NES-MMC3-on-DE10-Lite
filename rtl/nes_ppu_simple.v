@@ -1,0 +1,313 @@
+// Minimal NES PPU for Phase 2 Testing
+// 
+// This is a simplified PPU that only renders background tiles.
+// No sprites, no scrolling, just basic nametable display.
+//
+// CPU Interface:
+//   $2000 PPUCTRL - Control register
+//   $2001 PPUMASK - Mask register  
+//   $2002 PPUSTATUS - Status register (read)
+//   $2005 PPUSCROLL - Scroll register (write x2)
+//   $2006 PPUADDR - VRAM address (write x2)
+//   $2007 PPUDATA - VRAM data (read/write)
+//
+// VRAM Map:
+//   $0000-$0FFF - Pattern table 0 (CHR-ROM)
+//   $1000-$1FFF - Pattern table 1 (CHR-ROM)
+//   $2000-$23BF - Nametable 0 (32x30 tiles)
+//   $23C0-$23FF - Attribute table 0
+//   $2400-$27FF - Nametable 1 (mirrored based on cart)
+//   $3F00-$3F1F - Palette RAM
+
+module nes_ppu_simple (
+    input         clk,            // System clock (50 MHz)
+    input         reset,
+    
+    // Pixel clock enable (5.37 MHz = 50/~9.3)
+    input         ppu_ce,
+    
+    // CPU Interface
+    input   [2:0] cpu_addr,       // Register select (directly from addr[2:0])
+    input   [7:0] cpu_din,        // Data from CPU
+    output  [7:0] cpu_dout,       // Data to CPU
+    input         cpu_rd,         // Read strobe
+    input         cpu_wr,         // Write strobe
+    
+    // NMI output
+    output reg    nmi_n,          // Active low NMI
+    
+    // VRAM interface (directly to CHR ROM and nametable RAM)
+    output [13:0] vram_addr,      // VRAM address
+    input   [7:0] vram_din,       // Data from VRAM
+    output  [7:0] vram_dout,      // Data to VRAM
+    output        vram_rd,        // Read enable
+    output        vram_wr,        // Write enable
+    
+    // Video output
+    output  [5:0] pixel_color,    // 6-bit palette color index
+    output  [8:0] scanline,       // Current scanline (0-261)
+    output  [8:0] cycle,          // Current cycle (0-340)
+    output        vblank          // In vertical blank
+);
+
+    // =========================================================================
+    // PPU Registers
+    // =========================================================================
+    reg [7:0] ppuctrl;    // $2000 - NMI enable, sprite size, pattern table select, etc.
+    reg [7:0] ppumask;    // $2001 - Color enable, sprite/BG enable, etc.
+    reg [7:0] ppustatus;  // $2002 - Vblank, sprite 0 hit, sprite overflow
+    reg [7:0] oamaddr;    // $2003 - OAM address
+    reg [15:0] ppuaddr;   // Internal VRAM address register
+    reg [15:0] ppuaddr_t; // Temporary VRAM address
+    reg [7:0] ppuscroll_x;
+    reg [7:0] ppuscroll_y;
+    reg addr_latch;       // First/second write toggle
+    reg [7:0] read_buffer; // $2007 read buffer
+    
+    // =========================================================================
+    // Timing Generation
+    // =========================================================================
+    // NTSC: 262 scanlines, 341 cycles per line
+    // Visible: scanlines 0-239, cycles 0-255
+    // VBlank: scanlines 241-260
+    // Pre-render: scanline 261
+    
+    reg [8:0] h_count;  // 0-340
+    reg [8:0] v_count;  // 0-261
+    
+    wire end_of_line = (h_count == 340);
+    wire end_of_frame = (v_count == 261) && end_of_line;
+    
+    always @(posedge clk) begin
+        if (reset) begin
+            h_count <= 0;
+            v_count <= 0;
+        end else if (ppu_ce) begin
+            if (end_of_line) begin
+                h_count <= 0;
+                if (end_of_frame)
+                    v_count <= 0;
+                else
+                    v_count <= v_count + 1'b1;
+            end else begin
+                h_count <= h_count + 1'b1;
+            end
+        end
+    end
+    
+    assign scanline = v_count;
+    assign cycle = h_count;
+    
+    // Vblank flag
+    wire in_vblank = (v_count >= 241) && (v_count <= 260);
+    assign vblank = in_vblank;
+    
+    // Active rendering area
+    wire rendering = (v_count < 240) && (h_count < 256);
+    
+    // =========================================================================
+    // PPU Register Access - SINGLE always block for all register writes
+    // =========================================================================
+    reg [7:0] cpu_dout_reg;
+    assign cpu_dout = cpu_dout_reg;
+    
+    // Combined register update logic
+    always @(posedge clk) begin
+        if (reset) begin
+            ppuctrl <= 8'h00;
+            ppumask <= 8'h00;
+            ppustatus <= 8'h00;
+            oamaddr <= 8'h00;
+            ppuaddr <= 16'h0000;
+            ppuaddr_t <= 16'h0000;
+            ppuscroll_x <= 8'h00;
+            ppuscroll_y <= 8'h00;
+            addr_latch <= 1'b0;
+            read_buffer <= 8'h00;
+        end else begin
+            // VBlank flag management (PPU timing driven)
+            if (ppu_ce) begin
+                // Set vblank flag at start of vblank
+                if (v_count == 241 && h_count == 1)
+                    ppustatus[7] <= 1'b1;
+                // Clear at pre-render line
+                else if (v_count == 261 && h_count == 1)
+                    ppustatus[7] <= 1'b0;
+            end
+            
+            // CPU reads
+            if (cpu_rd) begin
+                case (cpu_addr)
+                    3'h2: begin  // $2002 PPUSTATUS read
+                        ppustatus[7] <= 1'b0;  // Clear vblank flag
+                        addr_latch <= 1'b0;    // Reset address latch
+                    end
+                    3'h7: begin  // $2007 PPUDATA read
+                        read_buffer <= vram_din;
+                        ppuaddr <= ppuaddr + (ppuctrl[2] ? 16'd32 : 16'd1);
+                    end
+                endcase
+            end
+            
+            // CPU writes
+            if (cpu_wr) begin
+                case (cpu_addr)
+                    3'h0: ppuctrl <= cpu_din;   // $2000
+                    3'h1: ppumask <= cpu_din;   // $2001
+                    3'h3: oamaddr <= cpu_din;   // $2003
+                    3'h5: begin                  // $2005 PPUSCROLL
+                        if (!addr_latch) begin
+                            ppuscroll_x <= cpu_din;
+                            addr_latch <= 1'b1;
+                        end else begin
+                            ppuscroll_y <= cpu_din;
+                            addr_latch <= 1'b0;
+                        end
+                    end
+                    3'h6: begin                  // $2006 PPUADDR
+                        if (!addr_latch) begin
+                            ppuaddr_t[13:8] <= cpu_din[5:0];
+                            ppuaddr_t[15:14] <= 2'b00;
+                            addr_latch <= 1'b1;
+                        end else begin
+                            ppuaddr_t[7:0] <= cpu_din;
+                            ppuaddr <= {2'b00, ppuaddr_t[13:8], cpu_din};
+                            addr_latch <= 1'b0;
+                        end
+                    end
+                    3'h7: begin                  // $2007 PPUDATA write
+                        // Increment address after write
+                        ppuaddr <= ppuaddr + (ppuctrl[2] ? 16'd32 : 16'd1);
+                    end
+                endcase
+            end
+        end
+    end
+    
+    // NMI generation
+    always @(posedge clk) begin
+        if (reset) begin
+            nmi_n <= 1'b1;
+        end else begin
+            // NMI when vblank flag set and NMI enable is set
+            nmi_n <= ~(ppustatus[7] && ppuctrl[7]);
+        end
+    end
+    
+    // Register reads (combinational)
+    always @(*) begin
+        case (cpu_addr)
+            3'h2: cpu_dout_reg = ppustatus;
+            3'h7: cpu_dout_reg = read_buffer;
+            default: cpu_dout_reg = 8'h00;
+        endcase
+    end
+    
+    // =========================================================================
+    // Background Rendering Pipeline
+    // =========================================================================
+    // Fetch sequence (8 cycles per tile):
+    //   Cycle 0-1: Nametable byte
+    //   Cycle 2-3: Attribute byte
+    //   Cycle 4-5: Pattern low byte
+    //   Cycle 6-7: Pattern high byte
+    
+    reg [7:0] nt_byte;      // Nametable tile index
+    reg [7:0] at_byte;      // Attribute byte
+    reg [7:0] pt_low;       // Pattern table low byte
+    reg [7:0] pt_high;      // Pattern table high byte
+    
+    // Tile position
+    wire [4:0] tile_x = h_count[7:3];  // 0-31
+    wire [4:0] tile_y = v_count[7:3];  // 0-29
+    wire [2:0] fine_x = h_count[2:0];  // 0-7
+    wire [2:0] fine_y = v_count[2:0];  // 0-7
+    
+    // VRAM address generation for rendering
+    reg [13:0] render_addr;
+    
+    // During rendering, use render addresses; otherwise use CPU address
+    wire rendering_active = (v_count < 240) && (ppumask[3] || ppumask[4]);
+    
+    always @(*) begin
+        if (rendering_active && h_count < 256) begin
+            case (fine_x[2:1])
+                2'b00: render_addr = {2'b10, tile_y, tile_x};        // Nametable $2000+
+                2'b01: render_addr = {2'b10, 4'b1111, tile_y[4:2], tile_x[4:2]}; // Attribute
+                2'b10: render_addr = {1'b0, ppuctrl[4], nt_byte, 1'b0, fine_y}; // Pattern low
+                2'b11: render_addr = {1'b0, ppuctrl[4], nt_byte, 1'b1, fine_y}; // Pattern high
+            endcase
+        end else begin
+            render_addr = ppuaddr[13:0];
+        end
+    end
+    
+    assign vram_addr = (cpu_rd && cpu_addr == 3'h7) || (cpu_wr && cpu_addr == 3'h7) ? 
+                       ppuaddr[13:0] : render_addr;
+    assign vram_dout = cpu_din;
+    assign vram_rd = 1'b1;  // Always reading for rendering
+    assign vram_wr = cpu_wr && (cpu_addr == 3'h7) && (ppuaddr[13:8] != 6'h3F);
+    
+    // Latch fetched data
+    always @(posedge clk) begin
+        if (ppu_ce && rendering_active && h_count < 256) begin
+            case (fine_x)
+                3'd1: nt_byte <= vram_din;
+                3'd3: at_byte <= vram_din;
+                3'd5: pt_low <= vram_din;
+                3'd7: pt_high <= vram_din;
+            endcase
+        end
+    end
+    
+    // =========================================================================
+    // Palette RAM (internal to PPU, $3F00-$3F1F)
+    // =========================================================================
+    reg [5:0] palette_ram [0:31];
+    
+    integer i;
+    initial begin
+        // Initialize palette with default colors
+        for (i = 0; i < 32; i = i + 1)
+            palette_ram[i] = 6'h0F;  // Black
+        palette_ram[0] = 6'h0F;   // Background color (black)
+        palette_ram[1] = 6'h01;   // Dark blue
+        palette_ram[2] = 6'h21;   // Light blue  
+        palette_ram[3] = 6'h31;   // Cyan
+    end
+    
+    // Palette write
+    always @(posedge clk) begin
+        if (cpu_wr && cpu_addr == 3'h7 && ppuaddr[13:8] == 6'h3F) begin
+            palette_ram[ppuaddr[4:0]] <= cpu_din[5:0];
+            // Mirror $3F10/$3F14/$3F18/$3F1C to $3F00/$3F04/$3F08/$3F0C
+            if (ppuaddr[4] && !ppuaddr[1] && !ppuaddr[0])
+                palette_ram[{1'b0, ppuaddr[3:2], 2'b00}] <= cpu_din[5:0];
+        end
+    end
+    
+    // =========================================================================
+    // Pixel Output
+    // =========================================================================
+    // Get pixel from pattern table
+    wire pixel_bit0 = pt_low[7 - fine_x];
+    wire pixel_bit1 = pt_high[7 - fine_x];
+    
+    // Get palette index from attribute table
+    // Each attribute byte covers 4x4 tiles (32x32 pixels)
+    // Bits 0-1: top-left, 2-3: top-right, 4-5: bottom-left, 6-7: bottom-right
+    wire [1:0] at_shift = {tile_y[1], tile_x[1]};
+    wire [1:0] palette_hi = (at_byte >> (at_shift * 2)) & 2'b11;
+    
+    // Combine to get full palette index (0-15 for BG)
+    wire [3:0] bg_palette_idx = {palette_hi, pixel_bit1, pixel_bit0};
+    
+    // If pixel is 0, use backdrop color ($3F00)
+    wire bg_transparent = (pixel_bit0 == 0) && (pixel_bit1 == 0);
+    wire [4:0] palette_addr = bg_transparent ? 5'h00 : {1'b0, bg_palette_idx};
+    
+    // Output color
+    wire bg_enabled = ppumask[3];
+    assign pixel_color = (rendering && bg_enabled) ? palette_ram[palette_addr] : palette_ram[0];
+
+endmodule

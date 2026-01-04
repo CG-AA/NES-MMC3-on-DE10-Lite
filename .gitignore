@@ -217,3 +217,28 @@ __marimo__/
 
 # Project-specfic auto-generated files
 csr.csv
+
+# Quartus build artifacts
+db/
+incremental_db/
+*.rpt
+*.summary
+*.done
+*.smsg
+*.jdi
+*.pin
+*.sld
+*.pof
+*.sof
+*.qws
+greybox_tmp/
+
+# Generated hex files (regenerate with extract_nes_rom.py)
+*_prg.hex
+*_chr.hex
+ppu_test_prg.hex
+ppu_test_chr.hex
+test_rom.hex
+
+# Compile logs
+compile.log

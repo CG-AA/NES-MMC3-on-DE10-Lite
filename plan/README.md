@@ -4,125 +4,175 @@
 
 **Philosophy:** Build minimal working systems, then iterate. Don't solve problems you don't have yet.
 
+**Current Status:** Phase 2 Complete ✅ - Donkey Kong title screen working!
+
+---
+
 ## Quick Start Milestones
 
-| Milestone | Target | Validation |
-|:----------|:-------|:-----------|
-| M1 | LiteX on real hardware | LED blinks, UART responds |
-| M2 | SDRAM read/write | Upload 32KB, read back, verify |
-| M3 | 6502 runs from BRAM | Infinite loop toggles LED |
-| M4 | PPU outputs test pattern | VGA shows colored bars |
-| M5 | NROM game boots | Donkey Kong title screen |
-| M6 | MMC3 game boots | Super Mario Bros 3 title |
+| Milestone | Target | Status |
+|:----------|:-------|:-------|
+| M1 | LiteX on real hardware | ⚠️ UART works, SDRAM fails |
+| M2 | SDRAM read/write | ❌ 256/256 errors |
+| M3 | 6502 runs from BRAM | ✅ LED counter working |
+| M4 | PPU outputs test pattern | ✅ VGA test pattern |
+| M5 | NROM game boots | ✅ **Donkey Kong title screen!** |
+| M6 | MMC3 game boots | ⏳ Phase 4 |
+
+---
 
 ## Architecture Overview
 
+### Current (Phase 2 - BRAM Only)
 ```
-LiteX SoC (100 MHz)          NES Core (21.48 MHz)
+┌─────────────────────────────────────────┐
+│              DE10-Lite                   │
+│  ┌─────────────────────────────────────┐│
+│  │         NES Core (50 MHz)           ││
+│  │  ┌─────────┐    ┌─────────────────┐ ││
+│  │  │ T65 CPU │◄──►│ PRG BRAM (32KB) │ ││
+│  │  └────┬────┘    └─────────────────┘ ││
+│  │       │                              ││
+│  │  ┌────▼────┐    ┌─────────────────┐ ││
+│  │  │   PPU   │◄──►│ CHR BRAM (8KB)  │ ││
+│  │  │VGA-sync │    │ VRAM (2KB)      │ ││
+│  │  └────┬────┘    └─────────────────┘ ││
+│  │       │                              ││
+│  │  ┌────▼────┐                        ││
+│  │  │   VGA   │──────────► Monitor     ││
+│  │  │640x480  │                        ││
+│  │  └─────────┘                        ││
+│  └─────────────────────────────────────┘│
+└─────────────────────────────────────────┘
+```
+
+### Target (Phase 3+ - SDRAM)
+```
+LiteX SoC (100 MHz)          NES Core (50 MHz)
 ┌─────────────────┐          ┌─────────────────┐
-│ VexRiscv CPU    │          │ 6502 CPU        │
+│ VexRiscv CPU    │          │ T65 6502 CPU    │
 │ UART            │◄────────►│ PPU → VGA       │
 │ SDRAM           │  Bridge  │ APU stub        │
 │ CSRs            │          │ Controller      │
 └─────────────────┘          └─────────────────┘
 ```
 
+---
+
 ## Implementation Phases
 
-### Phase 1: LiteX on Hardware
+### Phase 1: LiteX on Hardware ⚠️ Partial
 **Goal:** Prove DE10-Lite works with LiteX
 
-**Do:**
-- Build and load default LiteX SoC
-- Verify UART console works
-- Verify SDRAM initializes
+| Task | Status |
+|:-----|:-------|
+| Build LiteX SoC | ✅ Compiles |
+| UART console | ✅ Working |
+| SDRAM init | ❌ Fails (256/256 errors) |
 
-**Don't:**
-- Add NES-specific CSRs yet
-- Write ROM loader yet
-- Worry about clock domains yet
+**Next:** Debug SDRAM PHY timing for IS42S16320D
 
-**Done when:** `litex_term /dev/ttyUSB0` shows BIOS prompt
+### Phase 2: Minimal NES Core ✅ COMPLETE
+**Goal:** 6502 executes code, PPU shows graphics
 
-### Phase 2: Minimal NES Core
-**Goal:** 6502 executes code, PPU shows something
+| Task | Status |
+|:-----|:-------|
+| T65 6502 integrated | ✅ Working |
+| PPU tile rendering | ✅ Working |
+| VGA output | ✅ 640x480 @ 60Hz |
+| Donkey Kong title | ✅ **WORKING!** |
 
-**Do:**
-- Get T65 6502 core (external)
-- Get PPU core from iandailis/NES-FPGA
-- Wire to BRAM only (no SDRAM bridge)
-- Use NROM (mapper 0) - no bank switching
+**Completed:** 2026-01-05
 
-**Don't:**
-- Implement MMC3 yet
-- Build SDRAM bridge yet
-- Optimize anything
-
-**Done when:** Donkey Kong or similar NROM game shows title screen
-
-### Phase 3: SDRAM Integration
+### Phase 3: SDRAM Integration ⏳ NEXT
 **Goal:** Load ROMs larger than BRAM
 
-**Do:**
-- Build simple Wishbone bridge
-- Load PRG-ROM to SDRAM
-- Keep CHR-ROM in BRAM (≤8KB for NROM)
+| Task | Status |
+|:-----|:-------|
+| Fix SDRAM PHY | ⏳ TODO |
+| Wishbone bridge | ⏳ TODO |
+| ROM loader script | ⏳ TODO |
 
-**Don't:**
-- Implement CHR cache bank-swapping
-- Optimize latency
-
-**Done when:** Can load and run any NROM game via UART
+**See:** [03-memory-bridge.md](03-memory-bridge.md)
 
 ### Phase 4: MMC3 Support
 **Goal:** Run Super Mario Bros 3
 
-**Do:**
-- Port MMC3 mapper
-- Add PRG bank switching
-- Add CHR bank switching (still BRAM cache)
-- Add scanline counter IRQ
+| Task | Status |
+|:-----|:-------|
+| MMC3 mapper | ⏳ Future |
+| PRG bank switching | ⏳ Future |
+| CHR bank switching | ⏳ Future |
+| Scanline counter IRQ | ⏳ Future |
 
-**Done when:** SMB3 boots and is playable
+**See:** [04-integration.md](04-integration.md)
 
-## RTL Modules (Existing)
+---
 
-In [`rtl/`](../rtl/):
-- `nes_clk_gen.v` - Clock enables (3:1 PPU/CPU)
-- `nes_addr_decode.v` - Address decoder
-- `nes_internal_ram.v` - 2KB RAM
-- `nes_dma_controller.v` - OAM DMA
-- `nes_apu_stub.v` - Frame counter IRQ
-- `nes_controller.v` - Shift register
-- `nametable_mirror.v` - H/V mirroring
-- `cdc_multibit.v` - CDC utilities
+## Project Structure
 
-## External Components Needed
-
-| Component | Source | Priority |
-|:----------|:-------|:---------|
-| T65 6502 | github.com/fpganes/T65 | Phase 2 |
-| PPU | github.com/iandailis/NES-FPGA | Phase 2 |
-| MMC3 | github.com/MiSTer-devel/NES_MiSTer | Phase 4 |
-
-## Current Status
-
-### Working
-- [x] LiteX SoC simulation
-- [x] Basic RTL modules written
-
-### Next Action
-```bash
-# Build LiteX for real DE10-Lite hardware
-python3 -m litex_boards.targets.terasic_de10lite --build --load
 ```
+nes/
+├── rtl/                    # Verilog/VHDL source
+│   ├── nes_top_ppu.v       # Main top-level (ACTIVE)
+│   ├── nes_ppu_vga_sync.v  # VGA-synchronized PPU
+│   ├── nes_prg_bram.v      # 32KB PRG-ROM
+│   ├── nes_chr_multiport.v # 8KB CHR-ROM (4-port)
+│   ├── nes_vram_dp.v       # 2KB nametable (dual-port)
+│   ├── vga_timing.v        # VGA timing generator
+│   ├── nes_palette.v       # Color palette ROM
+│   ├── hex_display.v       # 7-segment driver
+│   ├── NES-FPGA/           # External: T65 CPU
+│   └── NES_MiSTer/         # External: Reference
+├── plan/                   # Documentation
+│   ├── README.md           # This file
+│   ├── 01-litex-setup.md   # Phase 1 details
+│   ├── 02-components.md    # Phase 2 details
+│   ├── 03-memory-bridge.md # Phase 3 details
+│   └── 04-integration.md   # Phase 4 details
+├── nes_vga.qpf/qsf/sdc     # Quartus project
+├── extract_nes_rom.py      # ROM extractor
+├── gen_ppu_test_rom_v2.py  # Test ROM generator
+└── donkey_kong.nes         # Test ROM
+```
+
+---
+
+## Build & Run
+
+```bash
+# Compile
+cd /home/cg/risc-v_on_de10-lite/nes
+quartus_sh --flow compile nes_vga
+
+# Program FPGA
+quartus_pgm -m jtag -o "p;nes_vga.sof"
+
+# Load different game
+python3 extract_nes_rom.py <game.nes>
+# Edit INIT_FILE in nes_top_ppu.v, recompile
+```
+
+---
+
+## Resource Usage
+
+| Resource | Used | Available | % |
+|:---------|-----:|----------:|--:|
+| Logic Elements | 22,808 | 49,760 | 46% |
+| M9K Blocks | 51 | 182 | 28% |
+| Memory Bits | 410,624 | 1,677,312 | 24% |
+
+**Room for:** SDRAM bridge, mappers, audio
+
+---
 
 ## Deferred Decisions
 
-These will be solved when encountered, not planned in advance:
+These will be solved when encountered:
 
-- CDC details between clock domains
-- CHR cache for >32KB games
-- SDRAM arbitration edge cases
-- PRG-ROM latency optimization
-- Audio output (APU beyond frame counter)
+- ⏳ CDC between LiteX and NES clock domains
+- ⏳ CHR cache for >32KB games
+- ⏳ SDRAM arbitration
+- ⏳ PRG-ROM latency optimization
+- ⏳ Audio output (beyond frame counter IRQ)
