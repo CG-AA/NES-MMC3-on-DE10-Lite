@@ -4,7 +4,7 @@
 
 **Philosophy:** Build minimal working systems, then iterate. Don't solve problems you don't have yet.
 
-**Current Status:** Phase 2 Complete ✅ - Donkey Kong title screen working!
+**Current Status:** Phase 3 In Progress ⚠️ - SDRAM small blocks work, large uploads unreliable
 
 ---
 
@@ -12,12 +12,43 @@
 
 | Milestone | Target | Status |
 |:----------|:-------|:-------|
-| M1 | LiteX on real hardware | ⚠️ UART works, SDRAM fails |
-| M2 | SDRAM read/write | ❌ 256/256 errors |
+| M1 | LiteX on real hardware | ✅ UART + SDRAM working |
+| M2 | SDRAM read/write | ⚠️ **Small blocks OK, large uploads fail** |
 | M3 | 6502 runs from BRAM | ✅ LED counter working |
 | M4 | PPU outputs test pattern | ✅ VGA test pattern |
 | M5 | NROM game boots | ✅ **Donkey Kong title screen!** |
 | M6 | MMC3 game boots | ⏳ Phase 4 |
+
+---
+
+## Latest Update (2026-01-06)
+
+**SDRAM Status: Partial Success**
+
+| Test | Result |
+|------|--------|
+| Individual writes | ✅ PASS at all addresses |
+| 256B - 4KB blocks | ✅ PASS with 10-20ms delays |
+| 8KB+ blocks | ❌ FAIL - data reads as 0 |
+| Full ROM (32KB) | ❌ FAIL - verification errors |
+
+**Root cause hypothesis:** L2 cache not flushing to SDRAM during large uploads, or row buffer conflicts causing data loss.
+
+**Recommended next steps:**
+1. Rebuild with L2 cache disabled
+2. Try Etherbone instead of UART
+3. Use BRAM-only for NROM games (they fit!)
+
+**See:** [03-memory-bridge.md](03-memory-bridge.md) for detailed findings
+
+**The Fix:** Doubled SDRAM timing parameters (tRP, tRCD, tWR: 40ns→80ns, tRFC: 140ns→200ns) to prevent write collisions with refresh cycles.
+
+**Next Steps:**
+1. Test full ROM upload with new timings
+2. Verify bulk upload reliability
+3. Integrate ROM loading with NES core
+
+**See:** [03-memory-bridge.md](03-memory-bridge.md) for detailed implementation
 
 ---
 

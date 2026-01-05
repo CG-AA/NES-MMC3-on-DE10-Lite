@@ -463,6 +463,33 @@ class IS42S16320(SDRModule):
     technology_timings = _TechnologyTimings(tREFI=64e6/8192, tWTR=(2, None), tCCD=(1, None), tRRD=None)
     speedgrade_timings = {"default": _SpeedgradeTimings(tRP=40, tRCD=40, tWR=40, tRFC=(None, 140), tFAW=None, tRAS=None)}
 
+class IS42S16320_SAFE(SDRModule):
+    """IS42S16320 with relaxed timings for improved reliability.
+    
+    Changes from default IS42S16320:
+    - tRP: 40ns → 80ns (doubled precharge time)
+    - tRCD: 40ns → 80ns (doubled row-to-column delay)
+    - tWR: 40ns → 80ns (doubled write recovery time)
+    - tRFC: 140ns → 200ns (increased refresh cycle time)
+    
+    These conservative timings reduce the chance of write commands
+    colliding with refresh cycles or being dropped due to timing violations.
+    """
+    # geometry
+    nbanks = 4
+    nrows  = 8192
+    ncols  = 1024
+    # timings - RELAXED for reliability
+    technology_timings = _TechnologyTimings(tREFI=64e6/8192, tWTR=(2, None), tCCD=(1, None), tRRD=None)
+    speedgrade_timings = {"default": _SpeedgradeTimings(
+        tRP=80,          # Doubled from 40ns
+        tRCD=80,         # Doubled from 40ns  
+        tWR=80,          # Doubled from 40ns
+        tRFC=(None, 200), # Increased from 140ns
+        tFAW=None, 
+        tRAS=None
+    )}
+
 class MT48LC4M16(SDRModule):
     # geometry
     nbanks = 4

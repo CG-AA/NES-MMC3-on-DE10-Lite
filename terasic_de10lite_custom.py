@@ -23,7 +23,7 @@ from litex.soc.cores.video import VideoVGAPHY
 from litex.soc.cores.led import LedChaser
 
 from litedram.phy import GENSDRPHY
-from litedram_modules import IS42S16320
+from litedram_modules import IS42S16320, IS42S16320_SAFE
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -56,6 +56,7 @@ class BaseSoC(SoCCore):
     def __init__(self, sys_clk_freq=50e6,
         with_led_chaser     = True,
         with_video_terminal = False,
+        sdram_safe_timings  = True,  # Use relaxed SDRAM timings by default
         **kwargs):
         platform = terasic_de10lite.Platform()
 
@@ -68,9 +69,11 @@ class BaseSoC(SoCCore):
         # SDR SDRAM --------------------------------------------------------------------------------
         if not self.integrated_main_ram_size:
             self.sdrphy = GENSDRPHY(platform.request("sdram"), sys_clk_freq)
+            # Choose SDRAM module based on safe_timings flag
+            sdram_module = IS42S16320_SAFE if sdram_safe_timings else IS42S16320
             self.add_sdram("sdram",
                 phy           = self.sdrphy,
-                module        = IS42S16320(sys_clk_freq, "1:1"),
+                module        = sdram_module(sys_clk_freq, "1:1"),
                 l2_cache_size = kwargs.get("l2_size", 8192)
             )
 

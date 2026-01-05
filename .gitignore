@@ -3,6 +3,27 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Build outputs
+build/
+logs/
+*.log
+
+# Quartus project files (keep in subdirs)
+db/
+incremental_db/
+quartus_nes_test/
+quartus_nes_vga/
+
+# ROM files (copyrighted)
+roms/
+rom_data/
+*.nes
+*.bin
+*.hex
+
+# Generated files
+csr.csv
+
 # C extensions
 *.so
 
