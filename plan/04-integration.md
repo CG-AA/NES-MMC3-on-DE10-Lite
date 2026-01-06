@@ -2,8 +2,35 @@
 
 **Goal:** Run Super Mario Bros 3 and other MMC3 games.
 
+**Status:** ⏳ NOT STARTED
+
+**Prerequisites:** 
+- Phase 3 complete ✅
+- SDRAM bulk uploads working ❌ (need Etherbone or custom loader)
+
+---
+
+## Why SDRAM is Required
+
+MMC3 games are too large for BRAM:
+
+| Game | PRG | CHR | Total | Fits in BRAM? |
+|------|-----|-----|-------|---------------|
+| Super Mario Bros 3 | 256KB | 128KB | 384KB | ❌ No (BRAM = 100KB free) |
+| Mega Man 3 | 256KB | 128KB | 384KB | ❌ No |
+| Kirby's Adventure | 512KB | 256KB | 768KB | ❌ No |
+
+**Solution:** Fix SDRAM bulk uploads before proceeding. Options:
+1. **Etherbone** - Ethernet-based (~1MB/s vs 11KB/s UART)
+2. **Custom binary loader** - Skip text-based BIOS commands
+3. **SD Card** - Load ROM from FAT filesystem
+
+---
+
 ## Success Criteria
 
+- [ ] SDRAM bulk upload reliable (32KB+)
+- [ ] Wishbone bridge for NES → SDRAM access
 - [ ] MMC3 mapper ported and integrated
 - [ ] PRG bank switching works
 - [ ] CHR bank switching works  
@@ -16,6 +43,13 @@
 MMC3 is the most common NES mapper. Once it works, ~70% of NES games are playable.
 
 ## Steps
+
+### 0. Fix SDRAM Uploads (Prerequisite)
+
+Choose one:
+- **Etherbone:** Rebuild LiteX with `--with-etherbone`, use `litex_server` + `litex_cli`
+- **Custom loader:** Binary protocol over UART, skip text commands
+- **SD Card:** Add SPI master, FAT filesystem
 
 ### 1. Get MMC3 from MiSTer
 

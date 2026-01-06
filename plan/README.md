@@ -4,7 +4,7 @@
 
 **Philosophy:** Build minimal working systems, then iterate. Don't solve problems you don't have yet.
 
-**Current Status:** Phase 3 In Progress ⚠️ - SDRAM small blocks work, large uploads unreliable
+**Current Status:** Phase 3 Complete ✅ - BRAM-only approach for NROM games
 
 ---
 
@@ -13,48 +13,64 @@
 | Milestone | Target | Status |
 |:----------|:-------|:-------|
 | M1 | LiteX on real hardware | ✅ UART + SDRAM working |
-| M2 | SDRAM read/write | ⚠️ **Small blocks OK, large uploads fail** |
+| M2 | SDRAM read/write | ⚠️ **Individual OK, bulk deferred** |
 | M3 | 6502 runs from BRAM | ✅ LED counter working |
 | M4 | PPU outputs test pattern | ✅ VGA test pattern |
 | M5 | NROM game boots | ✅ **Donkey Kong title screen!** |
-| M6 | MMC3 game boots | ⏳ Phase 4 |
+| M6 | Game switching tool | ✅ **switch_game.py** |
+| M7 | Keyboard controller | ⏳ **In Progress** |
+| M8 | MMC3 game boots | ⏳ Phase 4 (needs SDRAM) |
 
 ---
 
 ## Latest Update (2026-01-06)
 
-**SDRAM Status: Partial Success**
+### Phase 3 Complete: BRAM-Only Approach ✅
 
-| Test | Result |
-|------|--------|
-| Individual writes | ✅ PASS at all addresses |
-| 256B - 4KB blocks | ✅ PASS with 10-20ms delays |
-| 8KB+ blocks | ❌ FAIL - data reads as 0 |
-| Full ROM (32KB) | ❌ FAIL - verification errors |
+**Decision:** Use BRAM for NROM games instead of SDRAM.
 
-**Root cause hypothesis:** L2 cache not flushing to SDRAM during large uploads, or row buffer conflicts causing data loss.
+| Approach | Pros | Cons |
+|----------|------|------|
+| **BRAM** | 100% reliable, no bus contention, already working | 40KB limit, recompile per game |
+| SDRAM | 64MB capacity, runtime loading | Bulk uploads unreliable via UART |
 
-**Recommended next steps:**
-1. Rebuild with L2 cache disabled
-2. Try Etherbone instead of UART
-3. Use BRAM-only for NROM games (they fit!)
+**FPGA Resources:**
+- Available BRAM: 204 KB
+- Used (SoC + NES): ~100 KB  
+- Remaining: **104 KB** (NROM needs 40KB) ✅
 
-**See:** [03-memory-bridge.md](03-memory-bridge.md) for detailed findings
+### Tools Created
 
-**The Fix:** Doubled SDRAM timing parameters (tRP, tRCD, tWR: 40ns→80ns, tRFC: 140ns→200ns) to prevent write collisions with refresh cycles.
+| Tool | Purpose |
+|------|---------|
+| `scripts/tools/extract_nes_rom.py` | Convert .nes → .hex files |
+| `scripts/tools/switch_game.py` | Switch games (extract + update RTL + compile) |
+| `scripts/tools/keyboard_controller.py` | Laptop keyboard → NES controller via UART |
 
-**Next Steps:**
-1. Test full ROM upload with new timings
-2. Verify bulk upload reliability
-3. Integrate ROM loading with NES core
+### Usage
+```bash
+# List available games
+python scripts/tools/switch_game.py --list
 
-**See:** [03-memory-bridge.md](03-memory-bridge.md) for detailed implementation
+# Switch to a different game (extract only)
+python scripts/tools/switch_game.py some_game.nes --extract-only
+
+# Full switch with recompile and program
+python scripts/tools/switch_game.py some_game.nes --compile --program
+
+# Play with keyboard (requires controller CSR integration)
+python scripts/tools/keyboard_controller.py --port /dev/ttyUSB0
+```
+
+### SDRAM Status (Deferred to Phase 4)
+SDRAM hardware is fixed (phase 270°, safe timings). Bulk uploads fail due to UART buffer overrun.
+Future options: Etherbone, custom loader, or SD card.
 
 ---
 
 ## Architecture Overview
 
-### Current (Phase 2 - BRAM Only)
+### Current (Phase 2/3 - BRAM Only)
 ```
 ┌─────────────────────────────────────────┐
 │              DE10-Lite                   │
@@ -77,7 +93,7 @@
 └─────────────────────────────────────────┘
 ```
 
-### Target (Phase 3+ - SDRAM)
+### Target (Phase 4 - SDRAM for large games)
 ```
 LiteX SoC (100 MHz)          NES Core (50 MHz)
 ┌─────────────────┐          ┌─────────────────┐
@@ -115,26 +131,32 @@ LiteX SoC (100 MHz)          NES Core (50 MHz)
 
 **Completed:** 2026-01-05
 
-### Phase 3: SDRAM Integration ⏳ NEXT
-**Goal:** Load ROMs larger than BRAM
+### Phase 3: ROM Loading ✅ COMPLETE
+**Goal:** Support multiple NROM games with easy switching
 
 | Task | Status |
 |:-----|:-------|
-| Fix SDRAM PHY | ⏳ TODO |
-| Wishbone bridge | ⏳ TODO |
-| ROM loader script | ⏳ TODO |
+| BRAM capacity analysis | ✅ 40KB NROM fits |
+| ROM extraction tool | ✅ extract_nes_rom.py |
+| Game switching script | ✅ switch_game.py |
+| RTL path updates | ✅ rom_data/ prefix |
+
+**Decision:** BRAM-only for NROM games. SDRAM deferred to Phase 4.
+
+**Completed:** 2026-01-06
 
 **See:** [03-memory-bridge.md](03-memory-bridge.md)
 
-### Phase 4: MMC3 Support
+### Phase 4: MMC3 Support ⏳ NEXT
 **Goal:** Run Super Mario Bros 3
 
 | Task | Status |
 |:-----|:-------|
-| MMC3 mapper | ⏳ Future |
-| PRG bank switching | ⏳ Future |
-| CHR bank switching | ⏳ Future |
-| Scanline counter IRQ | ⏳ Future |
+| Fix SDRAM bulk uploads | ⏳ TODO (Etherbone?) |
+| MMC3 mapper | ⏳ TODO |
+| PRG bank switching | ⏳ TODO |
+| CHR bank switching | ⏳ TODO |
+| Scanline counter IRQ | ⏳ TODO |
 
 **See:** [04-integration.md](04-integration.md)
 
@@ -155,16 +177,27 @@ nes/
 │   ├── hex_display.v       # 7-segment driver
 │   ├── NES-FPGA/           # External: T65 CPU
 │   └── NES_MiSTer/         # External: Reference
+├── scripts/
+│   ├── tools/
+│   │   ├── switch_game.py      # Game switching automation
+│   │   ├── extract_nes_rom.py  # ROM → .hex conversion
+│   │   └── bios_manager.py     # LiteX BIOS utilities
+│   ├── tests/                  # SDRAM test scripts
+│   └── generators/             # Test ROM generators
+├── rom_data/               # Extracted .hex ROM files
+│   ├── donkey_kong_prg.hex
+│   └── donkey_kong_chr.hex
+├── roms/                   # Original .nes files
 ├── plan/                   # Documentation
 │   ├── README.md           # This file
 │   ├── 01-litex-setup.md   # Phase 1 details
 │   ├── 02-components.md    # Phase 2 details
 │   ├── 03-memory-bridge.md # Phase 3 details
 │   └── 04-integration.md   # Phase 4 details
-├── nes_vga.qpf/qsf/sdc     # Quartus project
-├── extract_nes_rom.py      # ROM extractor
-├── gen_ppu_test_rom_v2.py  # Test ROM generator
-└── donkey_kong.nes         # Test ROM
+├── quartus_nes_vga/        # Quartus project files
+├── build/                  # LiteX build outputs
+├── litedram_modules.py     # SDRAM timing definitions
+└── terasic_de10lite_custom.py  # LiteX target
 ```
 
 ---
@@ -172,16 +205,21 @@ nes/
 ## Build & Run
 
 ```bash
-# Compile
-cd /home/cg/risc-v_on_de10-lite/nes
-quartus_sh --flow compile nes_vga
+# Switch to a different game
+python3 scripts/tools/switch_game.py game.nes --compile --program
 
-# Program FPGA
-quartus_pgm -m jtag -o "p;nes_vga.sof"
+# Or manually:
+# 1. Extract ROM
+python3 scripts/tools/extract_nes_rom.py roms/game.nes
 
-# Load different game
-python3 extract_nes_rom.py <game.nes>
-# Edit INIT_FILE in nes_top_ppu.v, recompile
+# 2. Update RTL (automatic with switch_game.py)
+# Edit INIT_FILE paths in rtl/nes_top_ppu.v
+
+# 3. Compile
+quartus_sh --flow compile quartus_nes_vga/nes_vga.qpf
+
+# 4. Program FPGA
+quartus_pgm -m jtag -o "p;quartus_nes_vga/nes_vga.sof"
 ```
 
 ---

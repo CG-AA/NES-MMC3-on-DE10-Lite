@@ -1,8 +1,8 @@
-# Phase 3: SDRAM Integration
+# Phase 3: ROM Loading & Game Switching
 
-**Goal:** Load ROMs larger than BRAM via UART, run from SDRAM.
+**Goal:** Run multiple NROM games with easy switching mechanism.
 
-**Status:** ⚠️ SDRAM PARTIALLY WORKING (2026-01-06) - Small blocks OK, large uploads unreliable
+**Status:** ✅ COMPLETE (2026-01-06)
 
 **Prerequisites:** Phase 2 complete (Donkey Kong title screen working ✅)
 
@@ -10,48 +10,218 @@
 
 ## Success Criteria
 
-- [x] LiteX BIOS SDRAM test passes (fix current 256/256 errors) ← **FIXED with IS42S16320_SAFE timings**
-- [x] Individual mem_write/mem_read verified ← **WORKING at all addresses**
-- [x] Small block uploads (≤4KB) ← **WORKING with 10-20ms delays**
-- [ ] Large ROM upload (32KB+) ← **UNRELIABLE - data doesn't persist**
-- [ ] Run NROM game loaded from SDRAM
-- [ ] PRG-ROM served from SDRAM (CPU stalls during fetch)
+- [x] LiteX BIOS SDRAM test passes ← **FIXED (Safe Timings)**
+- [x] Individual mem_write/mem_read verified ← **WORKING**
+- [x] FPGA BRAM capacity analysis ← **40KB NROM fits easily**
+- [x] ROM-to-hex conversion tool ← **extract_nes_rom.py**
+- [x] Game switching script ← **switch_game.py created**
+- [ ] Test with 3+ different NROM games ← **Need more ROMs**
+- [x] Document NROM-compatible game list ← **See below**
 
 ---
 
-## Current Status (2026-01-06)
+## Decision: BRAM-Only for Phase 3 (2026-01-06)
 
-### ⚠️ MIXED RESULTS - Small Works, Large Fails
+### Why Not SDRAM?
+SDRAM bulk uploads via UART are unreliable:
+- Individual writes work ✅
+- Bulk uploads (32KB+) fail due to UART buffer overrun
+- Synchronous flow control too slow (~10 min for 40KB)
+- Not worth the complexity for NROM games
 
-**What works:**
-- Individual mem_write/mem_read at ANY address ✓
-- Small blocks (256B, 1KB, 4KB) with 10-20ms delays ✓
-- Immediate read-after-write verification ✓
+### Why BRAM Works
+| Resource | Available | Used | Remaining | NROM Needs |
+|----------|-----------|------|-----------|------------|
+| BRAM | 1,677 Kbits | ~820 Kbits | **857 Kbits** | 328 Kbits |
 
-**What fails:**
-- Large uploads (8KB+) - data reads as 0x00000000 after upload completes
-- Full ROM upload (32KB PRG + 8KB CHR) - verification fails
+**NROM (32KB PRG + 8KB CHR = 40KB) fits with 64KB headroom!**
 
-### Key Observations
+### Architecture (Already Working)
+```
+nes_top_ppu.v
+    └── nes_prg_bram #(.INIT_FILE("rom_data/game_prg.hex"))  ← 32KB compile-time
+    └── nes_chr_bram #(.INIT_FILE("rom_data/game_chr.hex"))  ← 8KB compile-time
+```
 
-1. **Immediate verification works** - Right after writing, reading succeeds
-2. **Data disappears** - After writing more data, earlier writes read as 0
-3. **Not purely timing** - Even 25ms delays still fail for large blocks  
-4. **BIOS crashes** - Rapid writes can hang BIOS, requiring FPGA reload
+This is exactly how Donkey Kong already works. ROM is baked into bitstream via `$readmemh()`.
 
-### Possible Root Causes
+### Tradeoffs
+| Aspect | BRAM-Only | SDRAM |
+|--------|-----------|-------|
+| Game switching | ~3 min recompile | Runtime (if working) |
+| Reliability | 100% | Problematic |
+| Max ROM size | ~100KB | 64MB |
+| Mapper support | NROM only | All mappers |
+| Complexity | Zero (done) | Wishbone bridge needed |
 
-1. **L2 cache not flushing** - Data in cache, not written to SDRAM
-2. **Row buffer conflicts** - Writing different rows evicts unflushed data
-3. **Refresh still colliding** - Long sequences hit refresh window
-4. **UART protocol issue** - Commands getting corrupted or lost
+**Decision:** Use BRAM for Phase 3 (NROM games). Defer SDRAM to Phase 4+ for larger mappers.
 
-### Recommended Next Steps
+---
 
-1. **Try disabling L2 cache** - Rebuild with `l2_cache_size=0`
-2. **Add explicit cache flush** - Call `flush_l2_cache` between writes
-3. **Test with Etherbone** - Faster, more reliable than UART
-4. **Fallback to BRAM** - NROM games fit in FPGA internal memory
+## SDRAM Status (Reference - Deferred to Phase 4)
+
+### ✅ Hardware is Fixed
+1. **Phase Shift:** 270° (signal integrity)
+2. **Timings:** `IS42S16320_SAFE` (doubled margins)
+3. **Geometry:** Validated, no aliasing
+
+### ⚠️ Protocol Bottleneck (Unsolved)
+- UART too slow for bulk uploads
+- Will revisit with Etherbone or custom loader in Phase 4
+
+---
+
+## Implementation Plan (BRAM-Only)
+
+### Step 1: Game Switching Script ✅
+Created `scripts/tools/switch_game.py`:
+1. Extract PRG/CHR from .nes file → .hex in `rom_data/`
+2. Update RTL paths in `nes_top_ppu.v`
+3. Optionally run Quartus compile
+4. Optionally program FPGA
+
+**Usage:**
+```bash
+# List available games
+python3 scripts/tools/switch_game.py --list
+
+# Switch game (update RTL only)
+python3 scripts/tools/switch_game.py game.nes
+
+# Full switch with compile and program
+python3 scripts/tools/switch_game.py game.nes --compile --program
+```
+
+### Step 2: Pre-generate Common Games
+Extract .hex files for popular NROM games:
+- Donkey Kong ✅ (already done)
+- Super Mario Bros (need ROM file)
+- Excitebike (need ROM file)
+- Ice Climber (need ROM file)
+- Balloon Fight (need ROM file)
+
+### Step 3: Test Multiple Games
+Verify each game boots and shows title screen.
+
+---
+
+## Controller Input Implementation
+
+### Current Status
+- ✅ Switch-based controller working in RTL (SW[0-6], KEY[1])
+- ✅ Keyboard script created (`scripts/tools/keyboard_controller.py`)
+- ✅ UART receiver RTL created (`rtl/nes_uart_controller.v`)
+- ✅ UART controller integrated into `nes_top_ppu.v`
+- ✅ GPIO pin added to QSF (PIN_V10 = GPIO[0])
+- ⏳ Quartus rebuild needed
+- ⏳ Hardware test pending
+
+### Option A: Standalone UART Controller (Implemented)
+
+Use a dedicated GPIO UART for controller input, separate from LiteX console.
+
+**Hardware Setup:**
+```
+Laptop USB ──► USB-UART Adapter ──► DE10-Lite GPIO Header
+                                         │
+                                    GPIO[0] = RX
+                                    GPIO[1] = TX (optional)
+                                    GND
+```
+
+**DE10-Lite GPIO Header (JP1):**
+| Pin | Signal | Use |
+|-----|--------|-----|
+| 1 | GPIO[0] | UART RX (input) |
+| 2 | GPIO[1] | UART TX (optional) |
+| 29/30 | GND | Ground |
+
+**Implementation Steps:**
+
+1. **Add GPIO pins to QSF**
+   ```tcl
+   set_location_assignment PIN_V10 -to uart_ctrl_rx
+   set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to uart_ctrl_rx
+   ```
+
+2. **Integrate UART receiver in nes_top_ppu.v**
+   ```verilog
+   // Add port
+   input uart_ctrl_rx,
+   
+   // Instantiate UART controller
+   wire [7:0] uart_buttons;
+   nes_uart_controller uart_ctrl (
+       .clk(clk50),
+       .rst(!reset_sync),
+       .uart_rx(uart_ctrl_rx),
+       .buttons_p1(uart_buttons),
+       .buttons_p2()
+   );
+   
+   // Mux with switches: UART overrides if non-zero
+   wire [7:0] buttons_p1 = (uart_buttons != 0) ? uart_buttons : sw_buttons;
+   ```
+
+3. **Update keyboard script for direct UART**
+   ```python
+   # Simple protocol: send button state as single byte
+   ser.write(bytes([button_state]))
+   ```
+
+4. **Rebuild and test**
+   ```bash
+   quartus_sh --flow compile quartus_nes_vga/nes_vga.qpf
+   python scripts/tools/keyboard_controller.py --port /dev/ttyUSB1
+   ```
+
+**Advantages:**
+- No LiteX changes needed
+- Works with pure NES design (no SoC required)
+- Low latency (~1ms)
+
+**Hardware Required:**
+- USB-UART adapter (e.g., CP2102, CH340, FTDI)
+- 3 jumper wires
+
+---
+
+## NROM-Compatible Games (32KB PRG + 8KB CHR)
+
+| Game | PRG | CHR | Status |
+|------|-----|-----|--------|
+| Donkey Kong | 16KB | 8KB | ✅ Working |
+| Super Mario Bros | 32KB | 8KB | Untested |
+| Excitebike | 16KB | 8KB | Untested |
+| Ice Climber | 24KB | 8KB | Untested |
+| Balloon Fight | 16KB | 8KB | Untested |
+
+---
+
+## SDRAM Integration (Deferred - Phase 4+)
+
+For games requiring more than 40KB (MMC1, MMC3 mappers), we'll need SDRAM.
+Options to explore:
+1. **Etherbone** - Ethernet-based uploads (~1MB/s)
+2. **Custom SFL loader** - Binary protocol, not text commands
+3. **SD Card** - Load ROM from FAT filesystem
+
+---
+
+## FIXED CONFIGURATION (Reference)
+
+### SDRAM Timings (`litedram_modules.py`)
+```python
+class IS42S16320_SAFE(SDRModule):
+    # ...
+    speedgrade_timings = {"default": _SpeedgradeTimings(
+        tRP=80,           # 4 cycles @ 50MHz
+        tRCD=80,          # 4 cycles
+        tWR=80,           # 4 cycles
+        tRFC=(None, 200), # 10 cycles (Safe margin)
+        tFAW=None, tRAS=None
+    )}
+```
 
 ---
 

@@ -122,59 +122,8 @@ def parse_nes_header(data: bytes) -> dict:
     }
 
 
-def upload_to_sdram(ser, data: bytes, base_address: int, name: str = "data"):
-    """Upload binary data to SDRAM using mem_write commands."""
-    
-    # Ensure we're aligned to 4 bytes
-    if len(data) % 4 != 0:
-        data = data + bytes(4 - len(data) % 4)
-    
-    total = len(data)
-    sent = 0
-    errors = 0
-    
-    print(f'Uploading {name}: {total} bytes to 0x{base_address:08X}')
-    start_time = time.time()
-    last_progress = 0
-    
-    # Clear any pending data
-    ser.reset_input_buffer()
-    
-    while sent < total:
-        # Write 4 bytes at a time
-        addr = base_address + sent
-        val = struct.unpack('<I', data[sent:sent+4])[0]  # Little endian
-        
-        cmd = f'mem_write 0x{addr:08x} 0x{val:08x}\r\n'
-        ser.write(cmd.encode())
-        
-        # Wait for command to be processed (10ms is reliable)
-        time.sleep(0.010)
-        
-        # Read and discard response every few commands
-        if sent % 64 == 0 and ser.in_waiting > 0:
-            ser.read(ser.in_waiting)
-        
-        sent += 4
-        
-        # Progress update
-        progress = sent * 100 // total
-        if progress >= last_progress + 5:
-            elapsed = time.time() - start_time
-            rate = sent / elapsed if elapsed > 0 else 0
-            remaining = (total - sent) / rate if rate > 0 else 0
-            print(f'  {sent}/{total} bytes ({progress}%) - {rate:.0f} B/s, ETA {remaining:.0f}s')
-            last_progress = progress
-    
-    # Final cleanup
-    time.sleep(0.1)
-    ser.read(ser.in_waiting)
-    
-    elapsed = time.time() - start_time
-    rate = total / elapsed if elapsed > 0 else 0
-    print(f'  Done: {total} bytes in {elapsed:.1f}s ({rate:.0f} B/s)')
-    
-    return errors == 0
+# NOTE: The upload_to_sdram function with synchronous flow control is defined above (lines 41-83).
+# The duplicate with blind delays was removed per plan/03-memory-bridge.md guidance.
 
 
 def verify_sdram(ser, data: bytes, base_address: int, samples: int = 16):

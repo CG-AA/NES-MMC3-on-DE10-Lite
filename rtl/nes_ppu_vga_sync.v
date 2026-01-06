@@ -39,6 +39,10 @@ module nes_ppu_vga_sync (
     output [10:0] nt_rd_addr,
     input   [7:0] nt_rd_data,
     
+    // Attribute table read port (same memory, different address)
+    output [10:0] attr_rd_addr,
+    input   [7:0] attr_rd_data,
+    
     // Direct CHR ROM read ports (need 2 for both bitplanes)
     output [12:0] chr_rd_addr_lo,
     input   [7:0] chr_rd_data_lo,
@@ -54,6 +58,13 @@ module nes_ppu_vga_sync (
     reg [7:0] ppustatus;
     reg [7:0] oamaddr;
     reg [15:0] ppuaddr;
+    
+    // =========================================================================
+    // OAM (Object Attribute Memory) - 256 bytes for 64 sprites
+    // =========================================================================
+    // Each sprite: 4 bytes (Y, Tile, Attr, X)
+    // Note: Sprite rendering not yet implemented, but OAM needed for DMA
+    reg [7:0] oam [0:255];
     reg [15:0] ppuaddr_t;
     reg [7:0] ppuscroll_x;
     reg [7:0] ppuscroll_y;
@@ -116,6 +127,9 @@ module nes_ppu_vga_sync (
                         ppustatus[7] <= 1'b0;
                         addr_latch <= 1'b0;
                     end
+                    3'h4: begin
+                        // OAMDATA read - no increment on read
+                    end
                     3'h7: begin
                         read_buffer <= vram_din;
                         ppuaddr <= ppuaddr + (ppuctrl[2] ? 16'd32 : 16'd1);
@@ -128,6 +142,11 @@ module nes_ppu_vga_sync (
                     3'h0: ppuctrl <= cpu_din;
                     3'h1: ppumask <= cpu_din;
                     3'h3: oamaddr <= cpu_din;
+                    3'h4: begin
+                        // OAMDATA write - write to OAM and increment address
+                        oam[oamaddr] <= cpu_din;
+                        oamaddr <= oamaddr + 8'd1;
+                    end
                     3'h5: begin
                         if (!addr_latch) begin
                             ppuscroll_x <= cpu_din;
@@ -164,6 +183,7 @@ module nes_ppu_vga_sync (
     always @(*) begin
         case (cpu_addr)
             3'h2: cpu_dout_reg = ppustatus;
+            3'h4: cpu_dout_reg = oam[oamaddr];  // OAMDATA read
             3'h7: cpu_dout_reg = read_buffer;
             default: cpu_dout_reg = 8'h00;
         endcase
@@ -176,16 +196,28 @@ module nes_ppu_vga_sync (
     assign vram_wr = cpu_wr && (cpu_addr == 3'h7) && (ppuaddr[13:8] != 6'h3F);
     
     // =========================================================================
-    // Direct Rendering
+    // Direct Rendering with Scrolling
     // =========================================================================
     
-    // Tile coordinates from VGA position
-    wire [4:0] tile_x = vga_x[7:3];  // 0-31
-    wire [4:0] tile_y = vga_y[7:3];  // 0-29  
-    wire [2:0] fine_x = vga_x[2:0];  // 0-7
-    wire [2:0] fine_y = vga_y[2:0];  // 0-7
+    // Apply scroll offset to VGA coordinates
+    wire [8:0] scroll_x = {1'b0, vga_x} + {1'b0, ppuscroll_x};
+    wire [8:0] scroll_y = {1'b0, vga_y} + {1'b0, ppuscroll_y};
     
-    // Nametable read: tile_y * 32 + tile_x
+    // Handle nametable switching for horizontal scrolling (bit 8 selects nametable)
+    wire nt_sel_h = scroll_x[8];  // Which nametable horizontally (0 or 1)
+    wire nt_sel_v = scroll_y[8];  // Which nametable vertically (0 or 1)
+    // Combined nametable select (ppuctrl bits 0-1 set base, scroll wraps)
+    wire [1:0] nt_select = ppuctrl[1:0] ^ {nt_sel_v, nt_sel_h};
+    
+    // Tile coordinates from scrolled position
+    wire [4:0] tile_x = scroll_x[7:3];  // 0-31
+    wire [4:0] tile_y = scroll_y[7:3];  // 0-29  
+    wire [2:0] fine_x = scroll_x[2:0];  // 0-7
+    wire [2:0] fine_y = scroll_y[2:0];  // 0-7
+    
+    // Nametable read: tile_y * 32 + tile_x (within selected nametable)
+    // Full address would be: nt_select * 0x400 + tile_y * 32 + tile_x
+    // But our 2KB VRAM with mirroring means we use 11 bits
     assign nt_rd_addr = {tile_y, tile_x};
     
     // Tile index from nametable
@@ -201,9 +233,40 @@ module nes_ppu_vga_sync (
     wire pixel_bit0 = chr_rd_data_lo[7 - fine_x];
     wire pixel_bit1 = chr_rd_data_hi[7 - fine_x];
     
-    // Attribute table read would require another port
-    // For now use palette 0
-    wire [1:0] palette_hi = 2'b00;
+    // =========================================================================
+    // Attribute Table Lookup
+    // =========================================================================
+    // Attribute table is at offset $3C0 within each nametable (960-1023)
+    // Each byte covers a 4x4 tile (32x32 pixel) area
+    // Bits: [7:6]=BR, [5:4]=BL, [3:2]=TR, [1:0]=TL (each 2x2 tile quadrant)
+    //
+    // Attribute address = $23C0 + (tile_y / 4) * 8 + (tile_x / 4)
+    //                   = $3C0 + (tile_y[4:2]) * 8 + tile_x[4:2]
+    
+    wire [2:0] attr_x = tile_x[4:2];  // 0-7 (which attribute byte horizontally)
+    wire [2:0] attr_y = tile_y[4:2];  // 0-7 (which attribute byte vertically)
+    
+    // Output attribute address for external VRAM lookup
+    // Address within nametable: $3C0 + attr_y * 8 + attr_x
+    assign attr_rd_addr = 11'h3C0 + {5'b0, attr_y, attr_x};
+    
+    // Quadrant within the 4x4 tile area (which 2x2 sub-block)
+    wire quadrant_x = tile_x[1];  // 0=left, 1=right
+    wire quadrant_y = tile_y[1];  // 0=top, 1=bottom
+    wire [1:0] quadrant = {quadrant_y, quadrant_x};
+    
+    // Extract palette bits from attribute byte based on quadrant
+    // quadrant 00 (TL) = bits [1:0], 01 (TR) = bits [3:2]
+    // quadrant 10 (BL) = bits [5:4], 11 (BR) = bits [7:6]
+    reg [1:0] palette_hi;
+    always @(*) begin
+        case (quadrant)
+            2'b00: palette_hi = attr_rd_data[1:0];  // Top-left
+            2'b01: palette_hi = attr_rd_data[3:2];  // Top-right
+            2'b10: palette_hi = attr_rd_data[5:4];  // Bottom-left
+            2'b11: palette_hi = attr_rd_data[7:6];  // Bottom-right
+        endcase
+    end
     
     // Palette index
     wire [3:0] bg_palette_idx = {palette_hi, pixel_bit1, pixel_bit0};

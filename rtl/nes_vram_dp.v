@@ -1,7 +1,9 @@
-// NES VRAM - True Dual Port with registered reads for M9K inference
+// NES VRAM - Triple Port with registered reads for M9K inference
 // 2KB nametable RAM
 // Port A: CPU access (read/write)
-// Port B: PPU rendering (read-only)
+// Port B: PPU nametable rendering (read-only)
+// Port C: PPU attribute table rendering (read-only)
+// Note: Quartus may duplicate memory to achieve 3 ports
 
 module nes_vram_dp #(
     parameter MIRROR_V = 1,
@@ -15,9 +17,13 @@ module nes_vram_dp #(
     input         we_a,
     output reg [7:0] rdata_a,
     
-    // Port B - PPU rendering (read-only)
+    // Port B - PPU nametable rendering (read-only)
     input  [10:0] addr_b,
-    output reg [7:0] rdata_b
+    output reg [7:0] rdata_b,
+    
+    // Port C - PPU attribute table rendering (read-only)
+    input  [10:0] addr_c,
+    output reg [7:0] rdata_c
 );
 
     (* ram_init_file = INIT_FILE *)
@@ -37,9 +43,14 @@ module nes_vram_dp #(
         rdata_a <= mem[addr_a];
     end
     
-    // Port B - PPU rendering (registered read)
+    // Port B - PPU nametable rendering (registered read)
     always @(posedge clk) begin
         rdata_b <= mem[addr_b];
+    end
+    
+    // Port C - PPU attribute table rendering (registered read)
+    always @(posedge clk) begin
+        rdata_c <= mem[addr_c];
     end
 
 endmodule

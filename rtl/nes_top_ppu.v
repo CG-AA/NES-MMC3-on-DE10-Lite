@@ -1,15 +1,25 @@
 // NES Top Level - Phase 2 with PPU and VGA
-// T65 CPU + PPU + BRAM + VGA output
+// T65 CPU + PPU + BRAM + VGA output + Controller input
 //
 // DEBUG MODES:
 //   SW[9] = 0: Normal speed (~1.78 MHz CPU)
 //   SW[9] = 1: Ultra-slow (1 Hz CPU) for visual debugging
 //   SW[8] = 0: Show PPU output on VGA
 //   SW[8] = 1: Show VGA test pattern (palette display)
+//
+// CONTROLLER INPUT (two sources, UART takes priority):
+//   Option 1 - UART from laptop keyboard (GPIO[0]):
+//     Connect USB-UART adapter to JP1 header, run keyboard_controller.py
+//   Option 2 - Direct switches:
+//     SW[0] = Right, SW[1] = Left, SW[2] = Down, SW[3] = Up
+//     SW[4] = Select, KEY[1] = Start (active low)
+//     SW[5] = B, SW[6] = A
 
 module nes_top_ppu (
     input         clk50,          // 50 MHz input clock
     input         reset_n,        // Active low reset (KEY[0])
+    input         key1,           // KEY[1] - Start button (active low)
+    input         uart_ctrl_rx,   // Controller UART RX (GPIO[0])
     input   [9:0] sw,             // Slide switches
     
     // LED output for debug
@@ -54,7 +64,15 @@ module nes_top_ppu (
     wire slow_mode = sw[9];
     wire cpu_ce_fast = (clk_div == 5'd27);
     wire cpu_ce_slow = (slow_div == 26'd49_999_999);
-    wire cpu_ce = slow_mode ? cpu_ce_slow : cpu_ce_fast;
+    
+    // Internal clock enable (always runs, used for DMA timing)
+    wire cpu_ce_internal = slow_mode ? cpu_ce_slow : cpu_ce_fast;
+    
+    // CPU clock enable (gated by DMA - CPU halts during DMA transfers)
+    // dma_cpu_halt is defined later, so we forward-declare it here
+    wire dma_cpu_halt;  // Forward declaration - assigned by DMA controller
+    wire cpu_ce = cpu_ce_internal && !dma_cpu_halt;
+    
     wire ppu_ce = (ppu_div == 4'd8);  // ~5.5 MHz PPU clock
     
     always @(posedge clk50) begin
@@ -165,6 +183,12 @@ module nes_top_ppu (
     wire [2:0] ppu_reg = addr16[2:0];
     wire [7:0] ppu_rdata;
     
+    // APU/IO registers: $4000-$401F
+    wire apu_io_sel = (addr16[15:5] == 11'b0100_0000_000);  // $4000-$401F
+    wire ctrl_sel = (addr16 == 16'h4016) || (addr16 == 16'h4017);
+    wire oam_dma_sel = (addr16 == 16'h4014);
+    wire [7:0] ctrl_rdata;
+    
     // PRG-ROM: 32KB at $8000-$FFFF
     wire prg_sel = addr16[15];
     wire [14:0] prg_addr = addr16[14:0];
@@ -180,13 +204,77 @@ module nes_top_ppu (
         else if (led_sel && !cpu_rw_n && cpu_ce)
             led_reg <= cpu_dout;
     end
+    
+    // =========================================================================
+    // Controller Input (switches + UART)
+    // =========================================================================
+    // Button mapping: A, B, Select, Start, Up, Down, Left, Right
+    
+    // Switch-based controller (direct from DE10-Lite)
+    wire [7:0] sw_buttons = {
+        sw[0],      // Right  (bit 7)
+        sw[1],      // Left   (bit 6)
+        sw[2],      // Down   (bit 5)
+        sw[3],      // Up     (bit 4)
+        ~key1,      // Start  (bit 3) - KEY1 is active low
+        sw[4],      // Select (bit 2)
+        sw[5],      // B      (bit 1)
+        sw[6]       // A      (bit 0)
+    };
+    
+    // UART-based controller (from laptop keyboard)
+    wire [7:0] uart_buttons;
+    wire uart_active;
+    nes_uart_controller uart_ctrl (
+        .clk        (clk50),
+        .rst        (!reset_sync),
+        .uart_rx    (uart_ctrl_rx),
+        .buttons_p1 (uart_buttons),
+        .buttons_p2 (),
+        .rx_valid   (),
+        .uart_active(uart_active)
+    );
+    
+    // Mux: UART overrides switches when active (using timeout-based detection)
+    wire [7:0] buttons_p1 = uart_active ? uart_buttons : sw_buttons;
+    
+    // Controller shift register
+    reg [7:0] ctrl_shift;
+    reg ctrl_strobe;
+    
+    always @(posedge clk50) begin
+        if (!reset_sync) begin
+            ctrl_shift <= 8'h00;
+            ctrl_strobe <= 1'b0;
+        end else if (cpu_ce) begin
+            if (ctrl_sel && !cpu_rw_n) begin
+                // Write to $4016 - strobe
+                ctrl_strobe <= cpu_dout[0];
+                if (cpu_dout[0])
+                    ctrl_shift <= buttons_p1;
+            end else if (ctrl_sel && cpu_rw_n && addr16[0] == 1'b0) begin
+                // Read from $4016 - shift out P1 button
+                if (!ctrl_strobe)
+                    ctrl_shift <= {1'b1, ctrl_shift[7:1]};
+            end
+            
+            // Strobe high = continuously reload
+            if (ctrl_strobe)
+                ctrl_shift <= buttons_p1;
+        end
+    end
+    
+    // Controller read data
+    assign ctrl_rdata = {7'b0100000, ctrl_shift[0]};
 
     // =========================================================================
     // Data Bus Mux
     // =========================================================================
-    assign cpu_din = !cpu_rw_n ? cpu_dout :
-                     prg_sel   ? prg_rdata :
+    // Note: During write cycles (!cpu_rw_n), cpu_din is ignored by the CPU.
+    // We return 8'hFF to avoid any combinational loop concerns.
+    assign cpu_din = prg_sel   ? prg_rdata :
                      ppu_sel   ? ppu_rdata :
+                     ctrl_sel  ? ctrl_rdata :
                      ram_sel   ? ram_rdata :
                      8'hFF;
 
@@ -195,18 +283,54 @@ module nes_top_ppu (
     // =========================================================================
     reg [7:0] ram [0:2047];
     
+    // DMA can read from RAM too, so address is muxed
+    wire [10:0] ram_addr_mux = dma_active ? dma_addr[10:0] : ram_addr;
+    
     always @(posedge clk50) begin
-        if (ram_we)
+        if (ram_we && !dma_active)
             ram[ram_addr] <= cpu_dout;
     end
     
-    assign ram_rdata = ram[ram_addr];
+    assign ram_rdata = ram[ram_addr_mux];
+
+    // =========================================================================
+    // OAM DMA Controller
+    // =========================================================================
+    wire        dma_active;
+    wire [15:0] dma_addr;
+    wire  [7:0] dma_data;
+    wire        dma_read;
+    wire        dma_write;
+    // Note: dma_cpu_halt is forward-declared in clock generation section
+    
+    // DMA trigger: write to $4014
+    wire oam_dma_trigger = oam_dma_sel && !cpu_rw_n && cpu_ce_internal;
+    
+    nes_dma_controller dma_ctrl (
+        .clk            (clk50),
+        .rst            (!reset_sync),
+        .cpu_clk_en     (cpu_ce_internal),  // Use internal CE for DMA timing
+        
+        .oam_dma_trigger(oam_dma_trigger),
+        .oam_dma_page   (cpu_dout),
+        
+        .dma_active     (dma_active),
+        .dma_addr       (dma_addr),
+        .dma_data       (dma_data),
+        .dma_read       (dma_read),
+        .dma_write      (dma_write),
+        
+        .bus_data_in    (ram_rdata),
+        .mem_ack        (1'b1),             // BRAM is always ready
+        
+        .cpu_halt       (dma_cpu_halt)
+    );
 
     // =========================================================================
     // PRG-ROM Instance (32KB)
     // =========================================================================
     nes_prg_bram #(
-        .INIT_FILE("donkey_kong_prg.hex")  // Donkey Kong PRG ROM
+        .INIT_FILE("../rom_data/donkey_kong_prg.hex")  // Donkey Kong PRG ROM
     ) prg_rom (
         .clk    (clk50),
         .addr   (prg_addr),
@@ -233,13 +357,22 @@ module nes_top_ppu (
     // Direct PPU rendering read ports
     wire [10:0] ppu_nt_rd_addr;
     wire  [7:0] ppu_nt_rd_data;
+    wire [10:0] ppu_attr_rd_addr;
+    wire  [7:0] ppu_attr_rd_data;
     wire [12:0] ppu_chr_rd_addr_lo;
     wire  [7:0] ppu_chr_rd_data_lo;
     wire [12:0] ppu_chr_rd_addr_hi;
     wire  [7:0] ppu_chr_rd_data_hi;
     
+    // PPU access from CPU or DMA
+    // DMA writes to OAMDATA ($2004 = register 4)
+    wire dma_ppu_wr = dma_write && (dma_addr == 16'h2004);
     wire ppu_cpu_rd = ppu_sel && cpu_rw_n && cpu_ce;
-    wire ppu_cpu_wr = ppu_sel && !cpu_rw_n && cpu_ce;
+    wire ppu_cpu_wr = (ppu_sel && !cpu_rw_n && cpu_ce) || dma_ppu_wr;
+    
+    // Mux PPU register address and data for DMA access
+    wire [2:0] ppu_reg_mux = dma_ppu_wr ? 3'h4 : ppu_reg;  // DMA always writes to $2004 (register 4)
+    wire [7:0] ppu_din_mux = dma_ppu_wr ? dma_data : cpu_dout;
     
     // Convert VGA coordinates to NES coordinates (2x scaling, centered)
     wire [7:0] nes_ppu_x = (pixel_x >= 64 && pixel_x < 576) ? ((pixel_x - 64) >> 1) : 8'd0;
@@ -250,8 +383,8 @@ module nes_top_ppu (
         .reset      (~reset_sync),
         .ppu_ce     (ppu_ce),
         
-        .cpu_addr   (ppu_reg),
-        .cpu_din    (cpu_dout),
+        .cpu_addr   (ppu_reg_mux),
+        .cpu_din    (ppu_din_mux),
         .cpu_dout   (ppu_rdata),
         .cpu_rd     (ppu_cpu_rd),
         .cpu_wr     (ppu_cpu_wr),
@@ -276,6 +409,8 @@ module nes_top_ppu (
         // Direct read ports
         .nt_rd_addr     (ppu_nt_rd_addr),
         .nt_rd_data     (ppu_nt_rd_data),
+        .attr_rd_addr   (ppu_attr_rd_addr),
+        .attr_rd_data   (ppu_attr_rd_data),
         .chr_rd_addr_lo (ppu_chr_rd_addr_lo),
         .chr_rd_data_lo (ppu_chr_rd_data_lo),
         .chr_rd_addr_hi (ppu_chr_rd_addr_hi),
@@ -299,7 +434,7 @@ module nes_top_ppu (
     wire [12:0] debug_chr_addr = {1'b0, debug_chr_addr_tile[3:0], 1'b0, debug_fine_y};
     
     nes_chr_multiport #(
-        .INIT_FILE("donkey_kong_chr.hex")
+        .INIT_FILE("../rom_data/donkey_kong_chr.hex")
     ) chr_rom (
         .clk    (clk50),
         .addr1  (ppu_vram_addr[12:0]),
@@ -312,7 +447,7 @@ module nes_top_ppu (
         .rdata4 (debug_chr_data)
     );
     
-    // Nametable VRAM - True Dual Port (CPU writes visible to PPU render reads)
+    // Nametable VRAM - Triple Port (CPU writes, PPU nametable, PPU attribute)
     wire nt_sel = (ppu_vram_addr[13] == 1'b1) && (ppu_vram_addr[12:8] < 5'h1F);
     wire [7:0] nt_cpu_rdata;
     
@@ -326,9 +461,12 @@ module nes_top_ppu (
         .wdata_a  (ppu_vram_dout),
         .we_a     (nt_sel && ppu_vram_wr),
         .rdata_a  (nt_cpu_rdata),
-        // Port B - PPU rendering read
+        // Port B - PPU nametable rendering read
         .addr_b   (ppu_nt_rd_addr),
-        .rdata_b  (ppu_nt_rd_data)
+        .rdata_b  (ppu_nt_rd_data),
+        // Port C - PPU attribute table rendering read
+        .addr_c   (ppu_attr_rd_addr),
+        .rdata_c  (ppu_attr_rd_data)
     );
     
     // VRAM read mux for CPU access

@@ -16,20 +16,54 @@ scripts/
 │   └── ...
 └── tools/                      # ROM loaders and utilities
     ├── bios_manager.py        # BIOS auto-detect and recovery
-    ├── upload_rom.py          # Upload NES ROM to SDRAM
-    └── extract_nes_rom.py     # Extract PRG/CHR from NES file
+    ├── switch_game.py         # Switch NES games (extract + compile)
+    ├── extract_nes_rom.py     # Extract PRG/CHR from NES file
+    ├── keyboard_controller.py # Laptop keyboard → NES controller
+    └── upload_rom.py          # Upload NES ROM to SDRAM (unreliable)
 ```
 
 ## Quick Reference
 
-### Test SDRAM
+### Switch Games (Recommended - BRAM approach)
 ```bash
-python3 scripts/tests/test_simple.py
+# List available games
+python3 scripts/tools/switch_game.py --list
+
+# Extract ROM only (no compile)
+python3 scripts/tools/switch_game.py some_game.nes --extract-only
+
+# Full switch with recompile and FPGA programming
+python3 scripts/tools/switch_game.py some_game.nes --compile --program
 ```
 
-### Upload ROM
+### Keyboard Controller (Play with Laptop Keyboard)
 ```bash
-python3 scripts/tools/upload_rom.py roms/donkey_kong.nes
+# Install dependency
+pip install pynput
+
+# Run in debug mode (shows button state, no UART)
+python3 scripts/tools/keyboard_controller.py --debug
+
+# Connect to FPGA (requires controller CSR in RTL)
+python3 scripts/tools/keyboard_controller.py --port /dev/ttyUSB0
+```
+
+**Controls:**
+| Key | NES Button |
+|-----|------------|
+| W / ↑ | D-Pad Up |
+| S / ↓ | D-Pad Down |
+| A / ← | D-Pad Left |
+| D / → | D-Pad Right |
+| J / Z | B |
+| K / X | A |
+| Enter | Start |
+| Right Shift | Select |
+| ESC | Quit |
+
+### Test SDRAM (for debugging)
+```bash
+python3 scripts/tests/test_simple.py
 ```
 
 ### Rebuild with Safe SDRAM Timings
