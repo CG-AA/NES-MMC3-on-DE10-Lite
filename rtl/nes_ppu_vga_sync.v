@@ -382,30 +382,33 @@ module nes_ppu_vga_sync (
     wire [7:0] spr0_attr = spr0_attr_snap;
     wire [7:0] spr0_x = spr0_x_snap;
     
+    // =========================================================================
+    // DEBUG VISUALIZATION (disabled by default, set to 1 to enable)
+    // =========================================================================
+    localparam DEBUG_ENABLE = 0;  // Set to 1 to show debug bars and crosshair
+    
     // Debug bars at top of screen - Row 1: OAM values
-    wire debug_bar_x = (vga_y < 8'd8) && (vga_x < spr0_x);      // Orange bar showing X from OAM
-    wire debug_bar_y = (vga_y >= 8'd8) && (vga_y < 8'd16) && (vga_x < spr0_y);   // Green bar showing Y from OAM
-    wire debug_bar_t = (vga_y >= 8'd16) && (vga_y < 8'd24) && (vga_x < spr0_tile); // Blue bar showing tile from OAM
-    wire debug_bar_a = (vga_y >= 8'd24) && (vga_y < 8'd32) && (vga_x < oamaddr_snap); // Cyan bar showing oamaddr
+    wire debug_bar_x = DEBUG_ENABLE && (vga_y < 8'd8) && (vga_x < spr0_x);
+    wire debug_bar_y = DEBUG_ENABLE && (vga_y >= 8'd8) && (vga_y < 8'd16) && (vga_x < spr0_y);
+    wire debug_bar_t = DEBUG_ENABLE && (vga_y >= 8'd16) && (vga_y < 8'd24) && (vga_x < spr0_tile);
+    wire debug_bar_a = DEBUG_ENABLE && (vga_y >= 8'd24) && (vga_y < 8'd32) && (vga_x < oamaddr_snap);
     
     // Debug bars - Row 2: DMA-captured values (what DMA read from RAM)
-    // These show what DMA captured when it read the first 4 bytes from RAM
-    // If working correctly, Row 2 bars should match Row 1 bars
-    wire debug_dma_x = (vga_y >= 8'd40) && (vga_y < 8'd48) && (vga_x < dma_debug_byte3);  // Purple: X from DMA
-    wire debug_dma_y = (vga_y >= 8'd48) && (vga_y < 8'd56) && (vga_x < dma_debug_byte0);  // Yellow: Y from DMA
-    wire debug_dma_t = (vga_y >= 8'd56) && (vga_y < 8'd64) && (vga_x < dma_debug_byte1);  // Magenta: tile from DMA
-    wire debug_dma_p = (vga_y >= 8'd64) && (vga_y < 8'd72) && (vga_x < dma_debug_page);   // Gray: source page from DMA
+    wire debug_dma_x = DEBUG_ENABLE && (vga_y >= 8'd40) && (vga_y < 8'd48) && (vga_x < dma_debug_byte3);
+    wire debug_dma_y = DEBUG_ENABLE && (vga_y >= 8'd48) && (vga_y < 8'd56) && (vga_x < dma_debug_byte0);
+    wire debug_dma_t = DEBUG_ENABLE && (vga_y >= 8'd56) && (vga_y < 8'd64) && (vga_x < dma_debug_byte1);
+    wire debug_dma_p = DEBUG_ENABLE && (vga_y >= 8'd64) && (vga_y < 8'd72) && (vga_x < dma_debug_page);
     
-    // Crosshair at sprite 0's actual position (fixed to show all edges)
-    wire [8:0] spr0_screen_y = {1'b0, spr0_y} + 9'd1;  // NES Y is stored as Y-1
+    // Crosshair at sprite 0's actual position
+    wire [8:0] spr0_screen_y = {1'b0, spr0_y} + 9'd1;
     wire [7:0] cross_y1 = spr0_screen_y[7:0];
     wire [7:0] cross_y2 = spr0_screen_y[7:0] + 8'd7;
     wire [7:0] cross_x1 = spr0_x;
     wire [7:0] cross_x2 = spr0_x + 8'd7;
     
-    wire debug_crosshair_h = ((vga_y == cross_y1) || (vga_y == cross_y2)) && 
+    wire debug_crosshair_h = DEBUG_ENABLE && ((vga_y == cross_y1) || (vga_y == cross_y2)) && 
                              (vga_x >= cross_x1) && (vga_x <= cross_x2);
-    wire debug_crosshair_v = ((vga_x == cross_x1) || (vga_x == cross_x2)) && 
+    wire debug_crosshair_v = DEBUG_ENABLE && ((vga_x == cross_x1) || (vga_x == cross_x2)) && 
                              (vga_y >= cross_y1) && (vga_y <= cross_y2);
     wire debug_crosshair = debug_crosshair_h || debug_crosshair_v;
     
@@ -425,7 +428,7 @@ module nes_ppu_vga_sync (
     end
     
     // =========================================================================
-    // Multi-Sprite Rendering (sprites 0-7)
+    // Multi-Sprite Rendering (all 64 sprites)
     // =========================================================================
     // Sprite pattern table: ppuctrl[3] selects $0000 or $1000
     wire [12:0] spr_pattern_base = ppuctrl[3] ? 13'h1000 : 13'h0000;
