@@ -4,7 +4,7 @@
 
 **Philosophy:** Build minimal working systems, then iterate. Don't solve problems you don't have yet.
 
-**Current Status:** Phase 3.5 - Core Refinement ✅ - Background ✅ working, Sprites ✅ WORKING!
+**Current Status:** Phase 3.5 - Core Refinement ✅ - Background ✅, Sprites ✅, Keyboard Input ✅ FULLY PLAYABLE!
 
 ---
 
@@ -24,8 +24,8 @@
 | M4 | PPU outputs test pattern | ✅ VGA test pattern |
 | M5 | NROM game boots | ✅ Donkey Kong title screen |
 | M6 | Game switching tool | ✅ switch_game.py |
-| M7 | Keyboard controller | ✅ UART controller working |
-| M7.5 | Core refinement | ✅ BG + Sprites fully working! |
+| M7 | Keyboard controller | ✅ UART 16x oversampling working! |
+| M7.5 | Core refinement | ✅ BG + Sprites + Input = PLAYABLE! |
 | M8 | MMC3 game boots | ⏳ Phase 4 |
 
 ---
@@ -194,6 +194,38 @@ After DMA fix, expanded from 1 sprite to 8 to 64:
 - Priority encoder selects lowest-indexed hit
 - Pipeline lookahead (`vga_x + 1`) compensates for CHR read latency
 - All sprites now render correctly with animations and priorities
+
+---
+
+## 🎮 UART Keyboard Controller (January 7, 2026)
+
+### Hardware Setup
+```
+USB-UART Adapter (CP2102)     DE10-Lite JP1 Header
+─────────────────────────     ────────────────────
+TX  ─────────────────────────► Pin 1 (GPIO[0] = PIN_V10)
+GND ─────────────────────────► Pin 30 (GND)
+```
+
+### Key Mappings
+| Key | NES Button |
+|-----|------------|
+| WASD / Arrow Keys | D-Pad |
+| K / X / Space | A Button |
+| J / Z | B Button |
+| Enter | Start |
+| Right Shift | Select |
+
+### Implementation Details
+- **Baud Rate:** 115200, 8N1
+- **16x Oversampling:** Robust reception with majority-vote noise filtering
+- **Auto-fallback:** If no UART data for 100ms, falls back to DE10-Lite switches
+- **Python Script:** `scripts/tools/keyboard_controller.py --port /dev/ttyUSB0 --continuous`
+
+### Initial Issue & Fix
+Original 1x sampling UART worked intermittently (only 0x80 and 0xFF received correctly).
+Root cause: Baud rate timing drift accumulated over 8 bits.
+**Solution:** 16x oversampling with 3-stage synchronizer + majority vote filter.
 
 ---
 

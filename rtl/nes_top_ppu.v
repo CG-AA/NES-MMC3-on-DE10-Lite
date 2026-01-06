@@ -640,18 +640,14 @@ module nes_top_ppu (
     assign vga_b = vga_active ? (nes_active ? final_b : 4'h0) : 4'h0;
 
     // =========================================================================
-    // LED Output - Show PPU debug info
+    // LED Output - Show Controller debug info
     // =========================================================================
-    // LED[5:0] = ppu_pixel_color (what PPU is outputting)
-    // LED[6] = PPU vblank
-    // LED[7] = rendering active (PPU scanline < 240)
-    // LED[8] = cpu_sync
-    // LED[9] = reset_sync
-    assign led[5:0] = ppu_pixel_color;
-    assign led[6] = ppu_vblank;
-    assign led[7] = (ppu_scanline < 240);  // Rendering area
-    assign led[8] = cpu_sync;
-    assign led[9] = reset_sync;
+    // LED[7:0] = Current button state (active buttons light up)
+    // LED[8] = UART active (receiving data)
+    // LED[9] = UART RX line (should toggle when receiving)
+    assign led[7:0] = buttons_p1;  // Show actual button state on LEDs
+    assign led[8] = uart_active;   // UART timeout active
+    assign led[9] = uart_ctrl_rx;  // Raw UART RX line (idle = HIGH)
 
     // =========================================================================
     // 7-Segment Displays
@@ -664,11 +660,13 @@ module nes_top_ppu (
             addr_latched <= addr16;
     end
     
-    // HEX0-3: CPU address
-    hex_display hd0 (.value(addr_latched[3:0]),   .segments(hex0));
-    hex_display hd1 (.value(addr_latched[7:4]),   .segments(hex1));
-    hex_display hd2 (.value(addr_latched[11:8]),  .segments(hex2));
-    hex_display hd3 (.value(addr_latched[15:12]), .segments(hex3));
+    // HEX0-1: Controller buttons (P1)
+    hex_display hd0 (.value(buttons_p1[3:0]),   .segments(hex0));  // A,B,Sel,Start
+    hex_display hd1 (.value(buttons_p1[7:4]),   .segments(hex1));  // U,D,L,R
+    
+    // HEX2-3: UART received buttons (raw)
+    hex_display hd2 (.value(uart_buttons[3:0]), .segments(hex2));
+    hex_display hd3 (.value(uart_buttons[7:4]), .segments(hex3));
     
     // HEX4-5: PPU scanline (for debug)
     hex_display hd4 (.value(ppu_scanline[3:0]), .segments(hex4));

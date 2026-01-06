@@ -177,3 +177,60 @@ Now when PPU samples on the WRITE state clock edge:
 ### Key Lesson
 **Registered outputs are visible to other modules NEXT cycle, not THIS cycle.**
 When crossing module boundaries with registered signals, set them one state/cycle early.
+
+---
+
+## 8. UART Receiver Timing Issues
+
+### The Problem
+UART controller worked intermittently - only 0x80 (Right button) and 0xFF (all buttons) were received correctly. Other values like 0x01, 0x02, 0x10 failed.
+
+### What We Observed
+- Values with bit 7 set worked (0x80, 0xFF)
+- Values with only lower bits set failed (0x01, 0x02, 0x10)
+- Sometimes worked briefly, then failed on subsequent runs
+
+### Root Cause: Baud Rate Timing Drift
+```verilog
+// Original 1x sampling approach:
+localparam BAUD_DIV = CLK_FREQ / BAUD_RATE;  // 50MHz / 115200 = 434.03
+
+// Error: 0.03 cycles per bit × 8 bits = 0.24 cycles drift
+// By bit 7, sampling is ~25% off-center
+```
+
+The CP2102 USB-UART adapter's crystal and the FPGA's 50MHz oscillator are not perfectly matched. With 1x sampling, the accumulated timing error caused late bits to be sampled at wrong times.
+
+### Why 0x80 Worked
+0x80 = `10000000` binary. The only set bit is bit 7 (last data bit received). By the time we sample bit 7, we've drifted ~0.24 cycles - still within the valid window. But for patterns like 0x01 = `00000001`, bit 0 is the first received and bits 1-7 are all 0. Any sampling error on the middle bits causes corruption.
+
+### The Fix: 16x Oversampling with Noise Filtering
+```verilog
+// 16x oversampling: sample 16 times per bit period
+localparam OVERSAMPLE = 16;
+localparam SAMPLE_DIV = CLK_FREQ / (BAUD_RATE * OVERSAMPLE);  // = 27 cycles
+
+// 3-stage synchronizer + majority vote filter
+reg [2:0] rx_filter;
+case (rx_filter)
+    3'b000, 3'b001, 3'b010, 3'b100: rx_filtered <= 0;
+    default: rx_filtered <= 1;
+endcase
+
+// Sample at middle of each bit (tick 7-8 out of 16)
+if (tick_cnt == 7) begin
+    // Much more robust - error is now only 0.03/16 = 0.002 cycles per sample
+end
+```
+
+### Key Lessons
+1. **16x oversampling is standard for UART** - provides ±3% baud rate tolerance
+2. **Majority vote filtering** eliminates noise glitches
+3. **Test with varied bit patterns** - 0x01, 0x02, 0x04, etc. catch timing issues
+4. **Visual debug helps** - LEDs showing button state revealed which values worked
+
+### Hardware Notes
+- CP2102 TX → FPGA GPIO[0] (PIN_V10 on JP1 header)
+- CP2102 GND → FPGA GND (Pin 30 on JP1 header)
+- 3.3V logic levels (DE10-Lite compatible)
+- Don't connect RX - we only need TX→FPGA direction
