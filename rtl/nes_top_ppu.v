@@ -136,6 +136,7 @@ module nes_top_ppu (
     wire        cpu_rw_n;
     wire        cpu_sync;
     wire        ppu_nmi_n;  // Declared here, driven by PPU
+    wire        apu_irq_n;  // Frame IRQ from APU stub
     
     T65 cpu (
         .Mode       (2'b00),
@@ -146,7 +147,7 @@ module nes_top_ppu (
         .Clk        (clk50),
         .Rdy        (1'b1),
         .Abort_n    (1'b1),
-        .IRQ_n      (1'b1),
+        .IRQ_n      (apu_irq_n),
         .NMI_n      (ppu_nmi_n),
         .SO_n       (1'b1),
         
@@ -187,7 +188,9 @@ module nes_top_ppu (
     wire apu_io_sel = (addr16[15:5] == 11'b0100_0000_000);  // $4000-$401F
     wire ctrl_sel = (addr16 == 16'h4016) || (addr16 == 16'h4017);
     wire oam_dma_sel = (addr16 == 16'h4014);
+    wire apu_sel = apu_io_sel && !ctrl_sel && !oam_dma_sel;  // APU regs excluding controller/DMA
     wire [7:0] ctrl_rdata;
+    wire [7:0] apu_rdata;
     
     // PRG-ROM: 32KB at $8000-$FFFF
     wire prg_sel = addr16[15];
@@ -275,6 +278,7 @@ module nes_top_ppu (
     assign cpu_din = prg_sel   ? prg_rdata :
                      ppu_sel   ? ppu_rdata :
                      ctrl_sel  ? ctrl_rdata :
+                     apu_sel   ? apu_rdata :
                      ram_sel   ? ram_rdata :
                      8'hFF;
 
@@ -327,6 +331,23 @@ module nes_top_ppu (
     );
 
     // =========================================================================
+    // APU Stub (Frame Counter IRQ only, no audio)
+    // =========================================================================
+    nes_apu_stub apu_inst (
+        .clk        (clk50),
+        .rst        (!reset_sync),
+        .cpu_clk_en (cpu_ce_internal),
+        
+        .apu_cs     (apu_sel && cpu_ce_internal),
+        .apu_addr   (addr16[4:0]),
+        .apu_wr     (!cpu_rw_n),
+        .apu_wr_data(cpu_dout),
+        .apu_rd_data(apu_rdata),
+        
+        .frame_irq_n(apu_irq_n)
+    );
+
+    // =========================================================================
     // PRG-ROM Instance (32KB)
     // =========================================================================
     nes_prg_bram #(
@@ -363,6 +384,12 @@ module nes_top_ppu (
     wire  [7:0] ppu_chr_rd_data_lo;
     wire [12:0] ppu_chr_rd_addr_hi;
     wire  [7:0] ppu_chr_rd_data_hi;
+    
+    // Sprite CHR read ports
+    wire [12:0] ppu_spr_chr_addr_lo;
+    wire [12:0] ppu_spr_chr_addr_hi;
+    wire  [7:0] ppu_spr_chr_data_lo;
+    wire  [7:0] ppu_spr_chr_data_hi;
     
     // PPU access from CPU or DMA
     // DMA writes to OAMDATA ($2004 = register 4)
@@ -414,7 +441,13 @@ module nes_top_ppu (
         .chr_rd_addr_lo (ppu_chr_rd_addr_lo),
         .chr_rd_data_lo (ppu_chr_rd_data_lo),
         .chr_rd_addr_hi (ppu_chr_rd_addr_hi),
-        .chr_rd_data_hi (ppu_chr_rd_data_hi)
+        .chr_rd_data_hi (ppu_chr_rd_data_hi),
+        
+        // Sprite CHR read ports
+        .spr_chr_addr_lo(ppu_spr_chr_addr_lo),
+        .spr_chr_addr_hi(ppu_spr_chr_addr_hi),
+        .spr_chr_data_lo(ppu_spr_chr_data_lo),
+        .spr_chr_data_hi(ppu_spr_chr_data_hi)
     );
 
     // =========================================================================
@@ -444,7 +477,11 @@ module nes_top_ppu (
         .addr3  (ppu_chr_rd_addr_hi),
         .rdata3 (ppu_chr_rd_data_hi),
         .addr4  (debug_chr_addr),
-        .rdata4 (debug_chr_data)
+        .rdata4 (debug_chr_data),
+        .addr5  (ppu_spr_chr_addr_lo),
+        .rdata5 (ppu_spr_chr_data_lo),
+        .addr6  (ppu_spr_chr_addr_hi),
+        .rdata6 (ppu_spr_chr_data_hi)
     );
     
     // Nametable VRAM - Triple Port (CPU writes, PPU nametable, PPU attribute)
