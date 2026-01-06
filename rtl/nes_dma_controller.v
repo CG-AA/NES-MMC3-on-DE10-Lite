@@ -20,6 +20,7 @@ module nes_dma_controller (
     output reg  [7:0]  dma_data,         // Data for OAM write
     output reg         dma_read,         // 1=reading from source
     output reg         dma_write,        // 1=writing to $2004
+    output wire [7:0]  dma_byte_count,   // Current byte being transferred (for debug)
     
     // Read data from bus
     input  wire [7:0]  bus_data_in,
@@ -48,6 +49,7 @@ module nes_dma_controller (
     reg [7:0]  read_latch;
     
     assign cpu_halt = (state != IDLE);
+    assign dma_byte_count = byte_count;
     
     always @(posedge clk) begin
         if (rst) begin
@@ -100,17 +102,20 @@ module nes_dma_controller (
                     if (mem_ack) begin
                         read_latch <= bus_data_in;
                         dma_read <= 1'b0;
+                        // Pre-set write signals HERE so they're valid on next cpu_clk_en
+                        // when dma_ppu_wr is sampled
+                        dma_addr <= 16'h2004;
+                        dma_data <= bus_data_in;  // Use bus_data_in directly, not read_latch
+                        dma_write <= 1'b1;
                         state <= WRITE;
                     end
                     // else: stay in READ_WAIT, keep dma_read asserted
                 end
                 
                 WRITE: begin
-                    // Drive $2004 address and write data
-                    dma_addr <= 16'h2004;
-                    dma_data <= read_latch;
-                    dma_read <= 1'b0;
-                    dma_write <= 1'b1;
+                    // Write signals already set in READ_WAIT
+                    // Now transition to next byte or done
+                    dma_write <= 1'b0;  // Clear write after one cycle
                     
                     if (byte_count == 8'd255) begin
                         state <= DONE;

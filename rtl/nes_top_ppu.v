@@ -309,6 +309,7 @@ module nes_top_ppu (
     
     // DMA trigger: write to $4014
     wire oam_dma_trigger = oam_dma_sel && !cpu_rw_n && cpu_ce_internal;
+    wire [7:0] dma_byte_count;
     
     nes_dma_controller dma_ctrl (
         .clk            (clk50),
@@ -323,12 +324,46 @@ module nes_top_ppu (
         .dma_data       (dma_data),
         .dma_read       (dma_read),
         .dma_write      (dma_write),
+        .dma_byte_count (dma_byte_count),
         
         .bus_data_in    (ram_rdata),
         .mem_ack        (1'b1),             // BRAM is always ready
         
         .cpu_halt       (dma_cpu_halt)
     );
+    
+    // =========================================================================
+    // DMA Debug: Capture first 4 bytes that DMA reads from RAM
+    // =========================================================================
+    reg [7:0] dma_debug_byte0;  // Should be sprite 0 Y
+    reg [7:0] dma_debug_byte1;  // Should be sprite 0 tile
+    reg [7:0] dma_debug_byte2;  // Should be sprite 0 attr
+    reg [7:0] dma_debug_byte3;  // Should be sprite 0 X
+    reg [7:0] dma_debug_page;   // Source page for DMA
+    
+    always @(posedge clk50) begin
+        if (!reset_sync) begin
+            dma_debug_byte0 <= 8'd0;
+            dma_debug_byte1 <= 8'd0;
+            dma_debug_byte2 <= 8'd0;
+            dma_debug_byte3 <= 8'd0;
+            dma_debug_page <= 8'd0;
+        end else begin
+            // Capture source page when DMA starts
+            if (oam_dma_trigger)
+                dma_debug_page <= cpu_dout;
+                
+            // Capture data when DMA writes to $2004 (use byte_count from DMA)
+            if (dma_write) begin
+                case (dma_byte_count)
+                    8'd0: dma_debug_byte0 <= dma_data;
+                    8'd1: dma_debug_byte1 <= dma_data;
+                    8'd2: dma_debug_byte2 <= dma_data;
+                    8'd3: dma_debug_byte3 <= dma_data;
+                endcase
+            end
+        end
+    end
 
     // =========================================================================
     // APU Stub (Frame Counter IRQ only, no audio)
@@ -393,7 +428,10 @@ module nes_top_ppu (
     
     // PPU access from CPU or DMA
     // DMA writes to OAMDATA ($2004 = register 4)
-    wire dma_ppu_wr = dma_write && (dma_addr == 16'h2004);
+    // CRITICAL: Gate DMA write by cpu_clk_en to produce single-cycle pulse
+    // Without this, PPU sees dma_write=1 for many 50MHz cycles, causing
+    // multiple OAM writes and corrupting sprite data!
+    wire dma_ppu_wr = dma_write && (dma_addr == 16'h2004) && cpu_ce_internal;
     wire ppu_cpu_rd = ppu_sel && cpu_rw_n && cpu_ce;
     wire ppu_cpu_wr = (ppu_sel && !cpu_rw_n && cpu_ce) || dma_ppu_wr;
     
@@ -447,7 +485,14 @@ module nes_top_ppu (
         .spr_chr_addr_lo(ppu_spr_chr_addr_lo),
         .spr_chr_addr_hi(ppu_spr_chr_addr_hi),
         .spr_chr_data_lo(ppu_spr_chr_data_lo),
-        .spr_chr_data_hi(ppu_spr_chr_data_hi)
+        .spr_chr_data_hi(ppu_spr_chr_data_hi),
+        
+        // DMA debug inputs
+        .dma_debug_byte0(dma_debug_byte0),
+        .dma_debug_byte1(dma_debug_byte1),
+        .dma_debug_byte2(dma_debug_byte2),
+        .dma_debug_byte3(dma_debug_byte3),
+        .dma_debug_page (dma_debug_page)
     );
 
     // =========================================================================

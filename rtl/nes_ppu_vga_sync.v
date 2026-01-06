@@ -53,7 +53,14 @@ module nes_ppu_vga_sync (
     output [12:0] spr_chr_addr_lo,
     output [12:0] spr_chr_addr_hi,
     input   [7:0] spr_chr_data_lo,
-    input   [7:0] spr_chr_data_hi
+    input   [7:0] spr_chr_data_hi,
+    
+    // DMA Debug Inputs - what DMA captured from RAM
+    input   [7:0] dma_debug_byte0,
+    input   [7:0] dma_debug_byte1,
+    input   [7:0] dma_debug_byte2,
+    input   [7:0] dma_debug_byte3,
+    input   [7:0] dma_debug_page
 );
 
     // =========================================================================
@@ -69,7 +76,7 @@ module nes_ppu_vga_sync (
     // OAM (Object Attribute Memory) - 256 bytes for 64 sprites
     // =========================================================================
     // Each sprite: 4 bytes (Y, Tile, Attr, X)
-    // Note: Sprite rendering not yet implemented, but OAM needed for DMA
+    // OAM writes handled in register access block below
     reg [7:0] oam [0:255];
     reg [15:0] ppuaddr_t;
     reg [7:0] ppuscroll_x;
@@ -346,95 +353,201 @@ module nes_ppu_vga_sync (
     wire in_visible_p2 = (vga_y_p2 < 240);
     
     // =========================================================================
-    // Simple Sprite Evaluation (Real-time, not cycle-accurate)
+    // DEBUG: Visual OAM Diagnostic
     // =========================================================================
-    // For each pixel, scan through OAM to find matching sprites
-    // This is simplified - real NES has 8-sprite limit and uses sprite evaluation
+    // Show sprite 0's X,Y,Tile values as visual bars to verify OAM content
+    // Red horizontal bar at Y=0: length = spr0_x value  
+    // Green horizontal bar at Y=8: length = spr0_y value
+    // Blue horizontal bar at Y=16: length = spr0_tile value
+    // Cyan bar at Y=24: length = oamaddr value (shows where DMA ended)
+    // Also draw a crosshair at (spr0_x, spr0_y+1) to show sprite position
     
-    // Sprite pattern table select (0 = $0000, 1 = $1000)
-    wire spr_pt_sel = ppuctrl[3];
+    // Snapshot OAM during VBlank only - this avoids read/write conflicts
+    reg [7:0] spr0_y_snap, spr0_tile_snap, spr0_attr_snap, spr0_x_snap;
+    reg [7:0] oamaddr_snap;
     
-    // Current screen position - look ahead 1 pixel for CHR latency
-    // vga_x/vga_y are the coordinates we're REQUESTING data for
-    // vga_x_p2/vga_y_p2 are the coordinates we're OUTPUTTING data for
-    wire [7:0] spr_x = vga_x;  // Look ahead for sprite matching
-    wire [7:0] spr_y = vga_y;  // Look ahead for sprite matching
+    always @(posedge clk) begin
+        // Only update snapshot at the start of vblank (scanline 241)
+        if (v_count == 241 && h_count == 0) begin
+            spr0_y_snap <= oam[0];
+            spr0_tile_snap <= oam[1];
+            spr0_attr_snap <= oam[2];
+            spr0_x_snap <= oam[3];
+            oamaddr_snap <= oamaddr;
+        end
+    end
     
-    // Sprite evaluation - find first matching sprite
-    // Check all 64 sprites, find first one that covers this pixel
-    reg [5:0] spr_found_idx;
-    reg spr_found;
-    reg [7:0] spr_found_tile;
-    reg [7:0] spr_found_attr;
-    reg [7:0] spr_found_x;
-    reg [2:0] spr_row;
+    wire [7:0] spr0_y = spr0_y_snap;
+    wire [7:0] spr0_tile = spr0_tile_snap;
+    wire [7:0] spr0_attr = spr0_attr_snap;
+    wire [7:0] spr0_x = spr0_x_snap;
     
-    integer s;
+    // Debug bars at top of screen - Row 1: OAM values
+    wire debug_bar_x = (vga_y < 8'd8) && (vga_x < spr0_x);      // Orange bar showing X from OAM
+    wire debug_bar_y = (vga_y >= 8'd8) && (vga_y < 8'd16) && (vga_x < spr0_y);   // Green bar showing Y from OAM
+    wire debug_bar_t = (vga_y >= 8'd16) && (vga_y < 8'd24) && (vga_x < spr0_tile); // Blue bar showing tile from OAM
+    wire debug_bar_a = (vga_y >= 8'd24) && (vga_y < 8'd32) && (vga_x < oamaddr_snap); // Cyan bar showing oamaddr
+    
+    // Debug bars - Row 2: DMA-captured values (what DMA read from RAM)
+    // These show what DMA captured when it read the first 4 bytes from RAM
+    // If working correctly, Row 2 bars should match Row 1 bars
+    wire debug_dma_x = (vga_y >= 8'd40) && (vga_y < 8'd48) && (vga_x < dma_debug_byte3);  // Purple: X from DMA
+    wire debug_dma_y = (vga_y >= 8'd48) && (vga_y < 8'd56) && (vga_x < dma_debug_byte0);  // Yellow: Y from DMA
+    wire debug_dma_t = (vga_y >= 8'd56) && (vga_y < 8'd64) && (vga_x < dma_debug_byte1);  // Magenta: tile from DMA
+    wire debug_dma_p = (vga_y >= 8'd64) && (vga_y < 8'd72) && (vga_x < dma_debug_page);   // Gray: source page from DMA
+    
+    // Crosshair at sprite 0's actual position (fixed to show all edges)
+    wire [8:0] spr0_screen_y = {1'b0, spr0_y} + 9'd1;  // NES Y is stored as Y-1
+    wire [7:0] cross_y1 = spr0_screen_y[7:0];
+    wire [7:0] cross_y2 = spr0_screen_y[7:0] + 8'd7;
+    wire [7:0] cross_x1 = spr0_x;
+    wire [7:0] cross_x2 = spr0_x + 8'd7;
+    
+    wire debug_crosshair_h = ((vga_y == cross_y1) || (vga_y == cross_y2)) && 
+                             (vga_x >= cross_x1) && (vga_x <= cross_x2);
+    wire debug_crosshair_v = ((vga_x == cross_x1) || (vga_x == cross_x2)) && 
+                             (vga_y >= cross_y1) && (vga_y <= cross_y2);
+    wire debug_crosshair = debug_crosshair_h || debug_crosshair_v;
+    
+    // Choose debug color - includes both OAM bars (row 1) and DMA bars (row 2)
+    wire debug_oam_bars = debug_bar_x || debug_bar_y || debug_bar_t || debug_bar_a;
+    wire debug_dma_bars = debug_dma_x || debug_dma_y || debug_dma_t || debug_dma_p;
+    wire debug_active = debug_oam_bars || debug_dma_bars || debug_crosshair;
+    
+    reg [4:0] debug_palette_addr;
     always @(*) begin
-        spr_found = 0;
-        spr_found_idx = 0;
-        spr_found_tile = 0;
-        spr_found_attr = 0;
-        spr_found_x = 0;
-        spr_row = 0;
-        
-        for (s = 0; s < 64; s = s + 1) begin
-            if (!spr_found) begin
-                // OAM format: Y, Tile, Attr, X (4 bytes per sprite)
-                // Y is actually Y-1 (sprite appears on next scanline)
-                if (spr_y >= oam[s*4] + 1 && spr_y < oam[s*4] + 9) begin
-                    // Sprite is on this scanline
-                    if (spr_x >= oam[s*4 + 3] && spr_x < oam[s*4 + 3] + 8) begin
-                        // Sprite covers this X position
-                        spr_found = 1;
-                        spr_found_idx = s[5:0];
-                        spr_found_tile = oam[s*4 + 1];
-                        spr_found_attr = oam[s*4 + 2];
-                        spr_found_x = oam[s*4 + 3];
-                        spr_row = spr_y - oam[s*4] - 1;
-                    end
-                end
+        if (debug_bar_x)        debug_palette_addr = 5'h06;  // Red
+        else if (debug_bar_y)   debug_palette_addr = 5'h1A;  // Green
+        else if (debug_bar_t)   debug_palette_addr = 5'h12;  // Blue
+        else if (debug_bar_a)   debug_palette_addr = 5'h2C;  // Cyan (for oamaddr)
+        else if (debug_crosshair) debug_palette_addr = 5'h30; // White
+        else                    debug_palette_addr = 5'h00;
+    end
+    
+    // =========================================================================
+    // Multi-Sprite Rendering (sprites 0-7)
+    // =========================================================================
+    // Sprite pattern table: ppuctrl[3] selects $0000 or $1000
+    wire [12:0] spr_pattern_base = ppuctrl[3] ? 13'h1000 : 13'h0000;
+    
+    // Use vga_x + 1 for lookahead to compensate for 1-cycle CHR read latency
+    wire [7:0] vga_x_next = vga_x + 8'd1;
+    
+    // Check all 64 sprites for hits (combinationally)
+    // Each sprite: Y at oam[i*4], Tile at oam[i*4+1], Attr at oam[i*4+2], X at oam[i*4+3]
+    wire [63:0] spr_active;
+    genvar si;
+    generate
+        for (si = 0; si < 64; si = si + 1) begin : spr_hit
+            wire [7:0] this_y = oam[si*4 + 0];
+            wire [7:0] this_x = oam[si*4 + 3];
+            wire [8:0] spr_top = {1'b0, this_y} + 9'd1;
+            wire y_hit = (vga_y >= spr_top[7:0]) && 
+                         (vga_y < (spr_top[7:0] + 8'd8)) && 
+                         (spr_top < 9'd240);
+            wire x_hit = (vga_x_next >= this_x) && 
+                         (vga_x_next < (this_x + 8'd8));
+            assign spr_active[si] = y_hit && x_hit;
+        end
+    endgenerate
+    
+    // Priority encoder: find lowest-indexed active sprite (6-bit index for 64 sprites)
+    reg [5:0] winning_spr;
+    reg any_spr_hit;
+    integer spr_idx;
+    always @(*) begin
+        winning_spr = 6'd0;
+        any_spr_hit = 1'b0;
+        for (spr_idx = 63; spr_idx >= 0; spr_idx = spr_idx - 1) begin
+            if (spr_active[spr_idx]) begin
+                winning_spr = spr_idx[5:0];
+                any_spr_hit = 1'b1;
             end
         end
     end
     
-    // Sprite pixel calculation (combinatorial for simplicity)
-    // In a real implementation, this would use CHR read ports with pipelining
-    wire [2:0] spr_fine_x = spr_x - spr_found_x;
-    wire [2:0] spr_fine_x_flip = spr_found_attr[6] ? (3'd7 - spr_fine_x) : spr_fine_x;
-    wire [2:0] spr_row_flip = spr_found_attr[7] ? (3'd7 - spr_row) : spr_row;
+    // Get winning sprite's OAM data using 6-bit index
+    wire [7:0] win_oam_base = {winning_spr, 2'b00};  // winning_spr * 4
+    wire [7:0] win_y    = oam[win_oam_base + 0];
+    wire [7:0] win_tile = oam[win_oam_base + 1];
+    wire [7:0] win_attr = oam[win_oam_base + 2];
+    wire [7:0] win_x    = oam[win_oam_base + 3];
     
-    // Sprite CHR address (directly output to module ports)
-    assign spr_chr_addr_lo = {spr_pt_sel, spr_found_tile, 1'b0, spr_row_flip};
-    assign spr_chr_addr_hi = {spr_pt_sel, spr_found_tile, 1'b1, spr_row_flip};
+    wire win_flip_h   = win_attr[6];
+    wire win_flip_v   = win_attr[7];
+    wire win_priority = win_attr[5];
+    wire [1:0] win_palette = win_attr[1:0];
     
-    // Pipeline sprite attributes to match CHR latency
-    reg spr_found_p1;
-    reg [7:0] spr_found_attr_p1;
-    reg [2:0] spr_fine_x_flip_p1;
+    // Calculate fine position within winning sprite (use vga_x_next to match hit detection)
+    wire [8:0] win_top = {1'b0, win_y} + 9'd1;
+    wire [2:0] win_fine_x_raw = vga_x_next[2:0] - win_x[2:0];
+    wire [2:0] win_fine_y_raw = vga_y[2:0] - win_top[2:0];
+    wire [2:0] win_fine_x = win_flip_h ? (3'd7 - win_fine_x_raw) : win_fine_x_raw;
+    wire [2:0] win_fine_y = win_flip_v ? (3'd7 - win_fine_y_raw) : win_fine_y_raw;
+    
+    // CHR address for winning sprite tile
+    assign spr_chr_addr_lo = spr_pattern_base + {win_tile, 1'b0, win_fine_y};
+    assign spr_chr_addr_hi = spr_pattern_base + {win_tile, 1'b1, win_fine_y};
+    
+    // Pipeline sprite data (1 cycle BRAM latency)
+    reg [7:0] spr_chr_lo_p1, spr_chr_hi_p1;
+    reg any_spr_hit_p1;
+    reg [2:0] win_fine_x_p1;
+    reg [1:0] win_palette_p1;
+    reg win_priority_p1;
+    reg is_spr0_p1;  // Track if winning sprite is sprite 0
     
     always @(posedge clk) begin
-        spr_found_p1 <= spr_found;
-        spr_found_attr_p1 <= spr_found_attr;
-        spr_fine_x_flip_p1 <= spr_fine_x_flip;
+        spr_chr_lo_p1 <= spr_chr_data_lo;
+        spr_chr_hi_p1 <= spr_chr_data_hi;
+        any_spr_hit_p1 <= any_spr_hit;
+        win_fine_x_p1 <= win_fine_x;
+        win_palette_p1 <= win_palette;
+        win_priority_p1 <= win_priority;
+        is_spr0_p1 <= (winning_spr == 6'd0) && any_spr_hit;
     end
     
-    // Sprite pixel bits from CHR ROM (bit extraction with flip) - use pipelined values
-    wire spr_pixel_bit0 = spr_chr_data_lo[7 - spr_fine_x_flip_p1];
-    wire spr_pixel_bit1 = spr_chr_data_hi[7 - spr_fine_x_flip_p1];
-    wire [1:0] spr_palette_hi = spr_found_attr_p1[1:0];
-    wire spr_transparent = (spr_pixel_bit0 == 0) && (spr_pixel_bit1 == 0);
-    wire spr_behind_bg = spr_found_attr_p1[5];
+    // Extract sprite pixel bits (bit 7 is leftmost pixel)
+    wire [2:0] spr_bit_sel = 3'd7 - win_fine_x_p1;
+    wire spr_pixel_lo = spr_chr_lo_p1[spr_bit_sel];
+    wire spr_pixel_hi = spr_chr_hi_p1[spr_bit_sel];
+    wire [1:0] spr_pixel = {spr_pixel_hi, spr_pixel_lo};
+    wire spr_transparent = (spr_pixel == 2'b00);
     
-    // Final sprite pixel
-    wire spr_visible = spr_found_p1 && spr_enabled && !spr_transparent;
-    wire [4:0] spr_palette_addr = {1'b1, spr_palette_hi, spr_pixel_bit1, spr_pixel_bit0};
+    // Sprite palette address (sprite palettes are at $3F10-$3F1F)
+    wire [4:0] spr_palette_addr = {1'b1, win_palette_p1, spr_pixel};
     
-    // Priority: sprite behind BG, or sprite in front
-    wire use_sprite = spr_visible && (!spr_behind_bg || bg_transparent);
-    wire [4:0] final_palette_addr = use_sprite ? spr_palette_addr : palette_addr;
+    // Final pixel selection with sprite priority
+    wire spr_visible = any_spr_hit_p1 && !spr_transparent && spr_enabled;
+    wire spr_in_front = spr_visible && !win_priority_p1;
+    wire spr_behind = spr_visible && win_priority_p1;
     
-    assign pixel_color = (in_visible_p2 && (bg_enabled || spr_enabled)) ? 
-                         palette_ram[final_palette_addr] : palette_ram[0];
+    // Choose final palette address
+    wire [4:0] final_palette_addr;
+    assign final_palette_addr = debug_active ? debug_palette_addr :
+                                (spr_in_front ? spr_palette_addr :
+                                 (bg_transparent && spr_behind) ? spr_palette_addr :
+                                 palette_addr);
+    
+    reg [5:0] debug_color;
+    always @(*) begin
+        // Row 1: OAM values (what PPU reads from OAM)
+        if (debug_bar_x)          debug_color = 6'h16;  // Bright red/orange - OAM X
+        else if (debug_bar_y)     debug_color = 6'h1A;  // Bright green - OAM Y
+        else if (debug_bar_t)     debug_color = 6'h12;  // Bright blue - OAM Tile
+        else if (debug_bar_a)     debug_color = 6'h2C;  // Cyan - oamaddr
+        // Row 2: DMA values (what DMA read from RAM)
+        else if (debug_dma_x)     debug_color = 6'h24;  // Purple - DMA X (byte3)
+        else if (debug_dma_y)     debug_color = 6'h28;  // Yellow - DMA Y (byte0)
+        else if (debug_dma_t)     debug_color = 6'h23;  // Magenta - DMA Tile (byte1)
+        else if (debug_dma_p)     debug_color = 6'h10;  // Gray - DMA Page
+        else if (debug_crosshair) debug_color = 6'h30;  // White
+        else                      debug_color = 6'h00;
+    end
+    
+    // Bypass all visibility checks for debug - use direct color
+    assign pixel_color = debug_active ? debug_color : 
+                         ((in_visible_p2 && (bg_enabled || spr_enabled)) ? 
+                          palette_ram[final_palette_addr] : palette_ram[0]);
 
 endmodule

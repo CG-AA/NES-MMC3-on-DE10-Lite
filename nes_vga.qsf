@@ -36,7 +36,7 @@
 # -------------------------------------------------------------------------- #
 
 
-set_global_assignment -name FAMILY "Cyclone V"
+set_global_assignment -name FAMILY "MAX 10"
 set_global_assignment -name DEVICE AUTO
 set_global_assignment -name TOP_LEVEL_ENTITY nes_vga
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 18.1.0
