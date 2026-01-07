@@ -188,32 +188,85 @@ If UART is not connected, use the onboard switches:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    DE10-Lite FPGA                        │
-│  ┌─────────────────────────────────────────────────────┐│
-│  │           NES Core (Standalone @ 50 MHz)            ││
-│  │                                                      ││
-│  │  ┌──────────┐         ┌─────────────────────────┐  ││
-│  │  │ T65 CPU  │◄───────►│ PRG-ROM (32KB BRAM)     │  ││
-│  │  │ ~1.78MHz │         │ Internal RAM (2KB)      │  ││
-│  │  └─────┬────┘         └─────────────────────────┘  ││
-│  │        │                                            ││
-│  │  ┌─────▼──────┐       ┌─────────────────────────┐  ││
-│  │  │    PPU     │◄─────►│ CHR-ROM (8KB, 6-port)   │  ││
-│  │  │ VGA-sync   │       │ VRAM (2KB, 3-port)      │  ││
-│  │  │ 64 Sprites │       │ OAM (256 bytes)         │  ││
-│  │  └─────┬──────┘       └─────────────────────────┘  ││
-│  │        │                                            ││
-│  │  ┌─────▼──────┐       ┌─────────────────────────┐  ││
-│  │  │ VGA Output │       │ UART Controller         │  ││
-│  │  │ 640x480    │       │ 115200 baud, 16x sample │  ││
-│  │  └────────────┘       └─────────────────────────┘  ││
-│  └─────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────┘
-         │                           │
-         ▼                           ▼
-    VGA Monitor              USB-UART ◄── Laptop Keyboard
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                           DE10-Lite FPGA (50 MHz)                            │
+│  ┌────────────────────────────────────────────────────────────────────────┐  │
+│  │                      NES Core (nes_top_ppu.v)                          │  │
+│  │                                                                        │  │
+│  │  ┌─────────────┐      CPU Bus        ┌──────────────────────────────┐  │  │
+│  │  │   T65 CPU   │◄───────────────────►│  Memory Map                  │  │  │
+│  │  │  (~1.78MHz) │                     │  $0000-$1FFF: RAM (2KB)      │  │  │
+│  │  │   6502      │                     │  $2000-$3FFF: PPU Registers  │  │  │
+│  │  └──────┬──────┘                     │  $4000-$4017: APU/IO         │  │  │
+│  │         │                            │  $4014: OAM DMA              │  │  │
+│  │         │ NMI                        │  $4016: Controller           │  │  │
+│  │         │                            │  $8000-$FFFF: PRG-ROM (32KB) │  │  │
+│  │  ┌──────▼──────┐                     └──────────────────────────────┘  │  │
+│  │  │     PPU     │                                                       │  │
+│  │  │  (VGA-sync) │◄────────┐                                             │  │
+│  │  │ 64 Sprites  │         │ CHR Data                                    │  │
+│  │  │ Background  │         │                                             │  │
+│  │  └──────┬──────┘    ┌────┴─────────────────────────────┐               │  │
+│  │         │           │  PPU Memory                      │               │  │
+│  │    Pixel Data       │  CHR-ROM (8KB, 6-port BRAM)      │               │  │
+│  │         │           │  VRAM/Nametables (2KB, 3-port)   │               │  │
+│  │         │           │  OAM (256 bytes, via DMA)        │               │  │
+│  │         │           │  Palette (64 colors ROM)         │               │  │
+│  │  ┌──────▼──────┐    └──────────────────────────────────┘               │  │
+│  │  │ VGA Timing  │                                                       │  │
+│  │  │  640x480    │         ┌──────────────────────────────┐              │  │
+│  │  │   @60Hz     │         │  DMA Controller              │              │  │
+│  │  │  (25 MHz)   │         │  Transfers 256 bytes to OAM  │              │  │
+│  │  └──────┬──────┘         │  CPU halted during transfer  │              │  │
+│  │         │                └──────────────────────────────┘              │  │
+│  │         │                                                              │  │
+│  │         │                ┌──────────────────────────────┐              │  │
+│  │         │                │  UART Controller             │              │  │
+│  │         │                │  115200 baud, 16x oversample │              │  │
+│  │         │                │  Keyboard → NES buttons      │              │  │
+│  │         │                └──────────────────────────────┘              │  │
+│  │         │                                                              │  │
+│  │         │                ┌──────────────────────────────┐              │  │
+│  │         │                │  APU Stub                    │              │  │
+│  │         │                │  Frame counter IRQ only      │              │  │
+│  │         │                │  (No audio output)           │              │  │
+│  │         │                └──────────────────────────────┘              │  │
+│  └─────────┼──────────────────────────────────────────────────────────────┘  │
+│            │                              │                                  │
+│       VGA Port                      GPIO (JP1)                               │
+│     ┌──────┴──────┐              ┌────────┴────────┐                         │
+│     │ R[3:0]      │              │ Pin 1 (V10)     │                         │
+│     │ G[3:0]      │              │ UART RX Input   │                         │
+│     │ B[3:0]      │              └────────┬────────┘                         │
+│     │ HS, VS      │                       │                                  │
+│     └──────┬──────┘                       │                                  │
+└────────────┼──────────────────────────────┼──────────────────────────────────┘
+             │                              │
+             ▼                              ▼
+        VGA Monitor                   USB-UART Adapter
+        (640x480)                     (CP2102/CH340)
+                                            │
+                                            ▼
+                                     Laptop Keyboard
+                                  (keyboard_controller.py)
 ```
+
+### Module Summary
+
+| Module | File | Purpose |
+|--------|------|---------|
+| `nes_top_ppu` | `nes_top_ppu.v` | Top-level: clock gen, memory map, bus mux |
+| `T65` | `NES-FPGA/src/t65/` | 6502 CPU core (VHDL) |
+| `nes_ppu_vga_sync` | `nes_ppu_vga_sync.v` | PPU: background, sprites, VGA output |
+| `nes_dma_controller` | `nes_dma_controller.v` | OAM DMA: 256-byte sprite transfer |
+| `nes_uart_controller` | `nes_uart_controller.v` | UART RX: keyboard input |
+| `nes_prg_bram` | `nes_prg_bram.v` | PRG-ROM: 32KB game code |
+| `nes_chr_multiport` | `nes_chr_multiport.v` | CHR-ROM: 8KB graphics (6 read ports) |
+| `nes_vram_dp` | `nes_vram_dp.v` | VRAM: 2KB nametables (3 ports) |
+| `nes_apu_stub` | `nes_apu_stub.v` | APU: frame counter IRQ only |
+| `vga_timing` | `vga_timing.v` | VGA: 640x480@60Hz sync generation |
+| `nes_palette` | `nes_palette.v` | Color lookup: 6-bit index → RGB |
+| `hex_display` | `hex_display.v` | 7-segment decoder for debug |
 
 ---
 
