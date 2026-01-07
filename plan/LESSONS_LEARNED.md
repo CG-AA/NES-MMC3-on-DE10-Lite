@@ -234,3 +234,119 @@ end
 - CP2102 GND → FPGA GND (Pin 30 on JP1 header)
 - 3.3V logic levels (DE10-Lite compatible)
 - Don't connect RX - we only need TX→FPGA direction
+
+---
+
+## 9. Efficient Quartus Compilation Workflow
+
+### The Problem
+Checking compile status by repeatedly running `tail` commands ("peeking the oven") is inefficient and clutters the terminal.
+
+### The Fix: Wait-for-Completion Pattern
+```bash
+# Start compile in background with nohup
+cd /path/to/quartus_project
+nohup quartus_sh --flow compile project_name > compile.log 2>&1 &
+
+# Wait for completion, then show results
+while pgrep -f "quartus_sh.*project_name" > /dev/null; do sleep 5; done && \
+echo "=== COMPILE FINISHED ===" && \
+tail -20 compile.log && \
+grep -E "(Error|error:)" compile.log | head -10 || echo "No errors found" && \
+ls -la project_name.sof 2>/dev/null && echo "SOF ready!" || echo "SOF not generated"
+```
+
+### Key Points
+1. **Use nohup** - prevents compile from being killed if terminal closes
+2. **Background with &** - frees terminal for other work
+3. **pgrep wait loop** - blocks until Quartus exits
+4. **Automatic result display** - shows errors and SOF status immediately
+
+### Quick Status Check (if needed)
+```bash
+# What stage is Quartus in?
+ps aux | grep -E "quartus_(map|fit|asm|sta)" | grep -v grep | awk '{print $11}'
+
+# Is it still running?
+pgrep -f "quartus_sh" && echo "Running" || echo "Done"
+```
+
+---
+
+## 10. Verilog Generate Blocks and Unused Signals
+
+### The Pattern
+When using generate blocks for conditional logic (e.g., mapper selection), signals used in one branch may be unused in another.
+
+```verilog
+reg [2:0] prg_bank;  // Used by UxROM, unused by NROM
+
+generate
+    if (MAPPER_TYPE == 0) begin : nrom_mapper
+        assign prg_addr = {2'b00, addr16[14:0]};  // prg_bank not used!
+    end
+    else if (MAPPER_TYPE == 2) begin : uxrom_mapper
+        wire [2:0] effective_bank = addr16[14] ? 3'b111 : prg_bank;
+        assign prg_addr = {effective_bank, addr16[13:0]};
+    end
+endgenerate
+```
+
+### Expected Warnings
+```
+Warning (10036): object "prg_bank" assigned a value but never read
+```
+
+### Key Lesson
+**These warnings are expected and benign** when using parameterized designs. The synthesizer optimizes away unused logic. Don't waste time "fixing" them.
+
+---
+
+## 11. Phase 4 UxROM Implementation Notes (Jan 7, 2026)
+
+### What Was Added
+1. **PRG BRAM expansion** (`nes_prg_bram.v`): 15-bit → 17-bit addressing (32KB → 128KB)
+2. **Bank switching logic** (`nes_top_ppu.v`): MAPPER_TYPE parameter with generate blocks
+3. **CHR-RAM support** (`nes_chr_multiport.v`): Write port for games that generate tiles at runtime
+4. **ROM extraction** (`extract_nes_rom.py`): Handles UxROM, mirrors small ROMs to 128KB
+
+### Module Parameters Added
+```verilog
+module nes_top_ppu #(
+    parameter MAPPER_TYPE = 0,    // 0=NROM, 2=UxROM
+    parameter PRG_SIZE = 32768,   // PRG ROM size in bytes
+    parameter CHR_RAM_MODE = 0    // 0=CHR-ROM, 1=CHR-RAM
+)(
+```
+
+### UxROM Bank Switching Logic
+```verilog
+// Bank register - captures writes to $8000-$FFFF
+reg [2:0] prg_bank;
+wire mapper_write = (MAPPER_TYPE == 2) && prg_sel && !cpu_rw_n && cpu_ce;
+
+always @(posedge clk50) begin
+    if (!reset_sync)
+        prg_bank <= 3'b000;
+    else if (mapper_write)
+        prg_bank <= cpu_dout[2:0];
+end
+
+// Address translation: $8000-$BFFF=switchable, $C000-$FFFF=fixed last bank
+wire [2:0] effective_bank = addr16[14] ? 3'b111 : prg_bank;
+assign prg_addr = {effective_bank, addr16[13:0]};
+```
+
+### ROM Mirroring for Bank 7
+Small UxROM games (e.g., 64KB) need the ROM mirrored so bank 7 contains the last real bank:
+```python
+# In extract_nes_rom.py
+while len(prg_data) < 131072:
+    prg_data = prg_data + prg_data[:min(len(prg_data), 131072 - len(prg_data))]
+```
+This ensures a 64KB ROM (banks 0-3) mirrors to 128KB where bank 7 = bank 3.
+
+### Compilation Result
+- **0 errors, 70 warnings** (all benign)
+- **SOF generated successfully**
+- Ready for hardware testing
