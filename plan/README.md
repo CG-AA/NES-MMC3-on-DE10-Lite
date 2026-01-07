@@ -1,8 +1,8 @@
-# NES on DE10-Lite - Project Documentation
+# NES on DE10-Lite - Detailed Documentation
 
-**Goal:** Build a complete NES emulator on DE10-Lite FPGA, starting standalone (Phase 3) then adding LiteX+SDRAM for larger games (Phase 4).
+> **📌 For the main project README, see [../README.md](../README.md)**
 
-**Philosophy:** Build minimal working systems, then iterate. Don't solve problems you don't have yet.
+This directory contains detailed technical documentation for developers and contributors.
 
 **Current Status:** Phase 3 ✅ COMPLETE - Standalone NES core FULLY PLAYABLE!
 

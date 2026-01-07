@@ -386,7 +386,7 @@ module nes_top_ppu (
     // PRG-ROM Instance (32KB)
     // =========================================================================
     nes_prg_bram #(
-        .INIT_FILE("../rom_data/donkey_kong_prg.hex")  // Donkey Kong PRG ROM
+        .INIT_FILE("../rom_data/BalloonFight_prg.hex")  // Donkey Kong PRG ROM
     ) prg_rom (
         .clk    (clk50),
         .addr   (prg_addr),
@@ -512,7 +512,7 @@ module nes_top_ppu (
     wire [12:0] debug_chr_addr = {1'b0, debug_chr_addr_tile[3:0], 1'b0, debug_fine_y};
     
     nes_chr_multiport #(
-        .INIT_FILE("../rom_data/donkey_kong_chr.hex")
+        .INIT_FILE("../rom_data/BalloonFight_chr.hex")
     ) chr_rom (
         .clk    (clk50),
         .addr1  (ppu_vram_addr[12:0]),
@@ -534,7 +534,7 @@ module nes_top_ppu (
     wire [7:0] nt_cpu_rdata;
     
     nes_vram_dp #(
-        .MIRROR_V(0),  // donkey_kong uses horizontal mirroring
+        .MIRROR_V(0),  // BalloonFight uses horizontal mirroring
         .INIT_FILE("")  // No init - CPU will write nametable
     ) nametable (
         .clk      (clk50),
