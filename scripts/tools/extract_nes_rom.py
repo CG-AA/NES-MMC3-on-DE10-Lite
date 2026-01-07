@@ -2,19 +2,42 @@
 """
 Extract PRG and CHR ROM from NES file for FPGA loading.
 Outputs .hex files compatible with Verilog $readmemh.
+
+Returns a dict with ROM info for use by switch_game.py:
+    {
+        'prg_size': int,      # PRG ROM size in bytes
+        'chr_size': int,      # CHR ROM size in bytes (0 = CHR-RAM)
+        'mapper': int,        # Mapper number
+        'mirroring': str,     # 'V' or 'H'
+        'mirror_v': int,      # 1 for vertical, 0 for horizontal (for RTL)
+        'chr_ram': bool,      # True if CHR-RAM (no CHR data in ROM)
+        'prg_hex': str,       # Path to PRG hex file
+        'chr_hex': str,       # Path to CHR hex file
+    }
 """
 
 import sys
 import os
 
+# Mapper name lookup
+MAPPER_NAMES = {
+    0: "NROM",
+    1: "MMC1 (SxROM)",
+    2: "UxROM",
+    3: "CNROM",
+    4: "MMC3 (TxROM)",
+    7: "AxROM",
+}
+
 def extract_nes(filename):
+    """Extract PRG and CHR ROM from NES file. Returns dict with ROM info or None on error."""
     with open(filename, 'rb') as f:
         data = f.read()
     
     # Parse iNES header
     if data[0:4] != b'NES\x1a':
         print("Error: Not a valid NES file")
-        return False
+        return None
     
     prg_size = data[4] * 16384  # 16KB units
     chr_size = data[5] * 8192   # 8KB units
@@ -23,17 +46,24 @@ def extract_nes(filename):
     
     mapper = (flags6 >> 4) | (flags7 & 0xF0)
     mirroring = 'V' if (flags6 & 1) else 'H'
+    mirror_v = 1 if (flags6 & 1) else 0
     has_trainer = bool(flags6 & 4)
+    chr_ram = (chr_size == 0)  # No CHR data = CHR-RAM
+    
+    mapper_name = MAPPER_NAMES.get(mapper, f"Unknown ({mapper})")
     
     print(f"NES ROM: {filename}")
     print(f"  PRG ROM: {prg_size // 1024}KB")
-    print(f"  CHR ROM: {chr_size // 1024}KB")
-    print(f"  Mapper: {mapper}")
-    print(f"  Mirroring: {mirroring}")
+    if chr_ram:
+        print(f"  CHR: RAM (no CHR data in ROM)")
+    else:
+        print(f"  CHR ROM: {chr_size // 1024}KB")
+    print(f"  Mapper: {mapper} ({mapper_name})")
+    print(f"  Mirroring: {mirroring} (MIRROR_V={mirror_v})")
     print(f"  Trainer: {has_trainer}")
     
-    if mapper != 0:
-        print(f"Warning: Mapper {mapper} not supported, only NROM (0) works")
+    if mapper not in [0, 1, 2, 3, 7]:
+        print(f"Warning: Mapper {mapper} not fully supported yet")
     
     # Calculate offsets
     header_size = 16
@@ -91,12 +121,24 @@ def extract_nes(filename):
     nmi_vec = (nmi_hi << 8) | nmi_lo
     print(f"  NMI vector: ${nmi_vec:04X}")
     
-    return True
+    # Return ROM info for switch_game.py
+    return {
+        'prg_size': len(prg_data),
+        'chr_size': chr_size,  # Original size (0 = CHR-RAM)
+        'mapper': mapper,
+        'mapper_name': mapper_name,
+        'mirroring': mirroring,
+        'mirror_v': mirror_v,
+        'chr_ram': chr_ram,
+        'prg_hex': prg_hex,
+        'chr_hex': chr_hex,
+    }
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: extract_nes_rom.py <rom.nes>")
         sys.exit(1)
     
-    if not extract_nes(sys.argv[1]):
+    result = extract_nes(sys.argv[1])
+    if not result:
         sys.exit(1)

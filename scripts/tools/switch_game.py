@@ -24,7 +24,41 @@ ROMS_DIR = os.path.join(PROJECT_DIR, "roms")
 
 # Import extract function
 sys.path.insert(0, SCRIPT_DIR)
-from extract_nes_rom import extract_nes
+from extract_nes_rom import extract_nes, MAPPER_NAMES
+
+
+def get_rom_info_only(filename):
+    """Get ROM info without extracting files. Returns dict or None."""
+    try:
+        with open(filename, 'rb') as f:
+            data = f.read(16)  # Just need header
+        
+        if data[0:4] != b'NES\x1a':
+            return None
+        
+        prg_size = data[4] * 16384
+        chr_size = data[5] * 8192
+        flags6 = data[6]
+        flags7 = data[7]
+        
+        mapper = (flags6 >> 4) | (flags7 & 0xF0)
+        mirroring = 'V' if (flags6 & 1) else 'H'
+        mirror_v = 1 if (flags6 & 1) else 0
+        chr_ram = (chr_size == 0)
+        mapper_name = MAPPER_NAMES.get(mapper, f"Unknown ({mapper})")
+        
+        return {
+            'prg_size': prg_size,
+            'chr_size': chr_size,
+            'mapper': mapper,
+            'mapper_name': mapper_name,
+            'mirroring': mirroring,
+            'mirror_v': mirror_v,
+            'chr_ram': chr_ram,
+        }
+    except Exception as e:
+        print(f"Error reading ROM info: {e}")
+        return None
 
 
 def find_nes_file(name):
@@ -63,10 +97,19 @@ def list_available_games():
     if games:
         for game in sorted(games):
             prg = os.path.join(ROM_DATA_DIR, f"{game}_prg.hex")
-            chr = os.path.join(ROM_DATA_DIR, f"{game}_chr.hex")
+            chr_file = os.path.join(ROM_DATA_DIR, f"{game}_chr.hex")
             prg_size = os.path.getsize(prg) // 3 if os.path.exists(prg) else 0  # Approx bytes
-            chr_size = os.path.getsize(chr) // 3 if os.path.exists(chr) else 0
-            print(f"  {game}: PRG={prg_size//1024}KB, CHR={chr_size//1024}KB")
+            chr_size = os.path.getsize(chr_file) // 3 if os.path.exists(chr_file) else 0
+            
+            # Try to get mapper/mirroring info from original NES file
+            nes_file = os.path.join(ROMS_DIR, f"{game}.nes")
+            info_str = ""
+            if os.path.exists(nes_file):
+                rom_info = get_rom_info_only(nes_file)
+                if rom_info:
+                    info_str = f" | Mapper {rom_info['mapper']} | Mirror={rom_info['mirroring']}"
+            
+            print(f"  {game}: PRG={prg_size//1024}KB, CHR={chr_size//1024}KB{info_str}")
     else:
         print("  No pre-extracted games found")
     
@@ -74,13 +117,20 @@ def list_available_games():
     if os.path.exists(ROMS_DIR):
         roms = [f for f in os.listdir(ROMS_DIR) if f.endswith('.nes')]
         for rom in sorted(roms):
-            print(f"  {rom}")
+            rom_path = os.path.join(ROMS_DIR, rom)
+            rom_info = get_rom_info_only(rom_path)
+            if rom_info:
+                mapper_name = rom_info.get('mapper_name', '?')
+                mirroring = rom_info['mirroring']
+                print(f"  {rom}: {mapper_name}, Mirror={mirroring}")
+            else:
+                print(f"  {rom}")
     else:
         print("  No roms/ directory found")
 
 
-def update_rtl_init_files(game_name):
-    """Update nes_top_ppu.v to use new ROM files."""
+def update_rtl_init_files(game_name, rom_info=None):
+    """Update nes_top_ppu.v to use new ROM files and parameters."""
     top_file = os.path.join(RTL_DIR, "nes_top_ppu.v")
     
     if not os.path.exists(top_file):
@@ -97,9 +147,9 @@ def update_rtl_init_files(game_name):
     prg_pattern = r'\.INIT_FILE\s*\(\s*"[^"]*_prg\.hex"\s*\)'
     chr_pattern = r'\.INIT_FILE\s*\(\s*"[^"]*_chr\.hex"\s*\)'
     
-    # Always use rom_data/ prefix for consistent path resolution
-    new_prg = f'.INIT_FILE("rom_data/{game_name}_prg.hex")'
-    new_chr = f'.INIT_FILE("rom_data/{game_name}_chr.hex")'
+    # Use ../rom_data/ prefix - paths are relative to quartus_nes_vga/ directory
+    new_prg = f'.INIT_FILE("../rom_data/{game_name}_prg.hex")'
+    new_chr = f'.INIT_FILE("../rom_data/{game_name}_chr.hex")'
     
     # Check if patterns exist (even if replacement is the same)
     prg_matches = re.findall(prg_pattern, content)
@@ -112,12 +162,28 @@ def update_rtl_init_files(game_name):
     new_content = re.sub(prg_pattern, new_prg, content)
     new_content = re.sub(chr_pattern, new_chr, new_content)
     
+    # Update MIRROR_V parameter if we have ROM info
+    if rom_info:
+        mirror_v = rom_info.get('mirror_v', 0)
+        mirroring = rom_info.get('mirroring', 'H')
+        
+        # Match .MIRROR_V(0) or .MIRROR_V(1) with optional comment
+        mirror_pattern = r'\.MIRROR_V\s*\(\s*[01]\s*\)\s*,?\s*(//[^\n]*)?'
+        mirror_comment = f"// {game_name} uses {'vertical' if mirror_v else 'horizontal'} mirroring"
+        new_mirror = f'.MIRROR_V({mirror_v}),  {mirror_comment}'
+        
+        if re.search(mirror_pattern, new_content):
+            new_content = re.sub(mirror_pattern, new_mirror, new_content)
+            print(f"  MIRROR_V: {mirror_v} ({mirroring} mirroring)")
+        else:
+            print(f"  Warning: MIRROR_V pattern not found (mirroring may be wrong)")
+    
     with open(top_file, 'w') as f:
         f.write(new_content)
     
     print(f"Updated {top_file}")
-    print(f"  PRG: rom_data/{game_name}_prg.hex")
-    print(f"  CHR: rom_data/{game_name}_chr.hex")
+    print(f"  PRG: ../rom_data/{game_name}_prg.hex")
+    print(f"  CHR: ../rom_data/{game_name}_chr.hex")
     return True
 
 
@@ -222,14 +288,16 @@ def main():
     
     # Find the NES file
     nes_path = find_nes_file(args.game)
+    rom_info = None
     
     if nes_path:
         print(f"\n=== Extracting {nes_path} ===")
         # Extract to rom_data/
         game_name = os.path.splitext(os.path.basename(nes_path))[0]
         
-        # Run extraction (outputs to same directory as input)
-        if not extract_nes(nes_path):
+        # Run extraction (returns dict with ROM info or None on error)
+        rom_info = extract_nes(nes_path)
+        if not rom_info:
             print("Extraction failed!")
             return 1
         
@@ -254,6 +322,15 @@ def main():
             print("Use --list to see available games")
             return 1
         print(f"Using pre-extracted ROM: {game_name}")
+        
+        # Try to get ROM info from original NES file if it exists
+        nes_in_roms = os.path.join(ROMS_DIR, f"{game_name}.nes")
+        if os.path.exists(nes_in_roms):
+            print(f"Reading ROM info from {nes_in_roms}...")
+            rom_info = get_rom_info_only(nes_in_roms)
+        else:
+            print("Warning: Original .nes file not found, cannot determine mirroring mode")
+            print("         MIRROR_V parameter will not be updated!")
     
     if args.extract_only:
         print("\nExtraction complete (--extract-only)")
@@ -261,7 +338,7 @@ def main():
     
     # Update RTL
     print(f"\n=== Updating RTL for {game_name} ===")
-    if not update_rtl_init_files(game_name):
+    if not update_rtl_init_files(game_name, rom_info):
         return 1
     
     # Copy hex files to Quartus directory
@@ -280,7 +357,19 @@ def main():
         print("\nTo compile and program:")
         print(f"  python switch_game.py {args.game} --compile --program")
     
-    print("\n✅ Game switch complete!")
+    # Print summary
+    print("\n" + "="*50)
+    print(f"✅ Game switch complete: {game_name}")
+    print("="*50)
+    if rom_info:
+        print(f"  Mapper:    {rom_info.get('mapper', '?')} ({rom_info.get('mapper_name', 'Unknown')})")
+        print(f"  Mirroring: {rom_info.get('mirroring', '?')} (MIRROR_V={rom_info.get('mirror_v', '?')})")
+        print(f"  PRG Size:  {rom_info.get('prg_size', 0) // 1024}KB")
+        if rom_info.get('chr_ram'):
+            print(f"  CHR:       RAM (writable)")
+        else:
+            print(f"  CHR Size:  {rom_info.get('chr_size', 0) // 1024}KB")
+    print("="*50)
     return 0
 
 

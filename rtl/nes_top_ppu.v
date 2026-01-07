@@ -534,7 +534,7 @@ module nes_top_ppu (
     wire [7:0] nt_cpu_rdata;
     
     nes_vram_dp #(
-        .MIRROR_V(0),  // Donkey Kong uses horizontal mirroring
+        .MIRROR_V(0),  // donkey_kong uses horizontal mirroring
         .INIT_FILE("")  // No init - CPU will write nametable
     ) nametable (
         .clk      (clk50),
